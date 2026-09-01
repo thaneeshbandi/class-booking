@@ -12,6 +12,7 @@ export default [
         process: 'readonly',
         Intl: 'readonly',
         URL: 'readonly',
+        Buffer: 'readonly',
       },
     },
     rules: {

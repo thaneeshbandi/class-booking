@@ -76,12 +76,12 @@ export const envSchema = z.object({
     )
     .optional(),
 
-  // Not yet required: authentication is not implemented in this milestone.
-  // It becomes mandatory when the auth layer lands.
+  // Signs the session cookie's HMAC token (see src/auth/tokens.js). Required
+  // now that the auth layer exists: a missing secret must fail startup, not
+  // fall back to a default every deployment shares.
   JWT_SECRET: z
     .string()
-    .min(32, 'JWT_SECRET must be at least 32 characters')
-    .optional(),
+    .min(32, 'JWT_SECRET must be at least 32 characters'),
 
   // Consumed only by the seed script, never by the running server.
   SEED_PASSWORD: z.string().min(8).optional(),

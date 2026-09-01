@@ -13,6 +13,7 @@ const valid = {
   NODE_ENV: 'test',
   DATABASE_URL: 'postgres://user:pw@localhost:5432/class_booking',
   STUDIO_TIMEZONE: 'Europe/London',
+  JWT_SECRET: 'a'.repeat(32),
 };
 
 describe('environment configuration', () => {
@@ -59,12 +60,15 @@ describe('environment configuration', () => {
     assert.equal(env.DATABASE_SSL, true);
   });
 
-  it('rejects a JWT_SECRET that is too short to be useful', () => {
+  it('requires JWT_SECRET and rejects one too short to be useful', () => {
     assert.throws(
       () => parseEnv({ ...valid, JWT_SECRET: 'short' }),
       EnvValidationError,
     );
-    // Absent is fine: authentication is not implemented in this milestone.
+    assert.throws(
+      () => parseEnv({ ...valid, JWT_SECRET: undefined }),
+      EnvValidationError,
+    );
     assert.doesNotThrow(() => parseEnv(valid));
   });
 
@@ -87,8 +91,9 @@ describe('environment configuration', () => {
       }
     })();
     assert.ok(error instanceof EnvValidationError);
-    assert.equal(error.issues.length, 2);
+    assert.equal(error.issues.length, 3);
     assert.match(error.message, /DATABASE_URL/);
     assert.match(error.message, /STUDIO_TIMEZONE/);
+    assert.match(error.message, /JWT_SECRET/);
   });
 });
