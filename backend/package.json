@@ -16,7 +16,7 @@
     "db:seed": "node scripts/db.js seed",
     "db:reset": "node scripts/db.js reset",
     "lint": "eslint .",
-    "test": "node --test \"tests/*.test.js\""
+    "test": "node --test --test-concurrency=1 \"tests/*.test.js\""
   },
   "dependencies": {
     "@node-rs/argon2": "^2.0.2",

@@ -4,25 +4,27 @@ import { env } from './config/env.js';
 import { db } from './db/knex.js';
 import authRouter from './routes/auth.js';
 import bookingsRouter from './routes/bookings.js';
+import classesRouter from './routes/classes.js';
 import membersRouter from './routes/members.js';
 import sessionsRouter from './routes/sessions.js';
 
 /**
- * Classes, the full booking lifecycle, co-instructor management, recurring
+ * The full booking lifecycle, co-instructor management, recurring
  * generation, CSV export, the dashboard and membership alerts are not
  * implemented yet. What is here is the authentication/authorization
- * foundation those features are built on: login/logout/current-user, and a
- * small set of read-only, server-scoped endpoints (sessions, a session's
- * bookings, all-visible bookings, members) that exist to prove — and be
- * tested against — deny-by-default access, resource-level instructor
- * ownership, and collection scoping performed in SQL rather than in
- * JavaScript after the fact.
+ * foundation, classes (goal 2), and session scheduling with conflict
+ * detection (goal 3): login/logout/current-user; class CRUD and
+ * archive/restore; session CRUD scoped and authorized the same way
+ * throughout — deny-by-default access, resource-level instructor ownership,
+ * and collection scoping performed in SQL rather than in JavaScript after
+ * the fact.
  */
 export function createApp() {
   const app = express();
   app.use(express.json());
 
   app.use('/api/auth', authRouter);
+  app.use('/api/classes', classesRouter);
   app.use('/api/sessions', sessionsRouter);
   app.use('/api/bookings', bookingsRouter);
   app.use('/api/members', membersRouter);

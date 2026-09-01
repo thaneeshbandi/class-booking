@@ -14,10 +14,10 @@ export async function startTestServer() {
   await new Promise((resolve) => server.once('listening', resolve));
   const { port } = server.address();
 
-  function request({ method = 'GET', path, cookie, body }) {
+  function request({ method = 'GET', path, cookie, body, headers: extraHeaders }) {
     return new Promise((resolve, reject) => {
       const data = body === undefined ? null : JSON.stringify(body);
-      const headers = {};
+      const headers = { ...extraHeaders };
       if (data !== null) {
         headers['Content-Type'] = 'application/json';
         headers['Content-Length'] = Buffer.byteLength(data);
