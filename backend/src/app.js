@@ -9,15 +9,17 @@ import membersRouter from './routes/members.js';
 import sessionsRouter from './routes/sessions.js';
 
 /**
- * The full booking lifecycle, co-instructor management, recurring
- * generation, CSV export, the dashboard and membership alerts are not
- * implemented yet. What is here is the authentication/authorization
- * foundation, classes (goal 2), and session scheduling with conflict
- * detection (goal 3): login/logout/current-user; class CRUD and
- * archive/restore; session CRUD scoped and authorized the same way
- * throughout — deny-by-default access, resource-level instructor ownership,
- * and collection scoping performed in SQL rather than in JavaScript after
- * the fact.
+ * The full booking lifecycle, recurring generation, CSV export, the
+ * dashboard and membership alerts are not implemented yet. What is here is
+ * the authentication/authorization foundation, classes (goal 2), session
+ * scheduling with conflict detection (goal 3), and co-instructor management
+ * (goal 5): login/logout/current-user; class CRUD and archive/restore;
+ * session CRUD scoped and authorized the same way throughout — deny-by-
+ * default access, resource-level instructor ownership, and collection
+ * scoping performed in SQL rather than in JavaScript after the fact; and,
+ * nested under a session, staff-only add/remove of its co-instructors with
+ * the same scheduling-conflict rule applied to them as to a primary
+ * instructor.
  */
 export function createApp() {
   const app = express();

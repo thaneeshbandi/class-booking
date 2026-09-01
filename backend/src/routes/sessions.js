@@ -5,6 +5,7 @@ import {
   computeEndsAt,
   findSchedulingConflicts,
 } from '../domain/sessionConflicts.js';
+import { findActiveInstructor } from '../domain/instructors.js';
 import { db } from '../db/knex.js';
 import { authenticate } from '../middleware/authenticate.js';
 import { requireRole } from '../middleware/authorize.js';
@@ -14,6 +15,7 @@ import {
 } from '../middleware/sessionAccess.js';
 import { idParamSchema } from '../validation/ids.js';
 import { zodErrorResponse } from '../validation/respond.js';
+import coInstructorsRouter from './sessionCoInstructors.js';
 
 /**
  * Goal 3 — sessions. Staff create, view, edit and delete; an instructor may
@@ -133,15 +135,6 @@ function findRoom(queryable, roomId) {
   return queryable('rooms').where({ id: roomId }).first();
 }
 
-/** An instructor may only be assigned as primary if they are, right now, an
- * active account with the instructor role — never staff, never a
- * deactivated login. */
-function findActiveInstructor(queryable, instructorId) {
-  return queryable('users')
-    .where({ id: instructorId, role: 'instructor', is_active: true })
-    .first();
-}
-
 // Deny-by-default: every route below requires authentication, and each one
 // states its own authorization policy explicitly.
 router.use(authenticate);
@@ -211,7 +204,7 @@ router.post('/', requireRole('staff'), async (req, res, next) => {
     const outcome = await db.transaction(async (trx) => {
       const conflicts = await findSchedulingConflicts(trx, {
         roomId,
-        instructorId: primaryInstructorId,
+        instructorIds: [primaryInstructorId],
         startsAt,
         durationMinutes,
       });
@@ -287,9 +280,35 @@ router.patch('/:sessionId', requireRole('staff'), async (req, res, next) => {
     const capacity = parsed.data.capacity ?? existing.capacity;
 
     const outcome = await db.transaction(async (trx) => {
+      // Goal 5: a session's primary instructor and every co-instructor are
+      // all "instructors" for conflict purposes, and the primary invariant
+      // (primary != any co-instructor) must hold before this update lands —
+      // both read fresh, inside this transaction, against current rows.
+      const coInstructorRows = await trx('session_co_instructors')
+        .where({ session_id: idResult.data })
+        .select('user_id');
+      const coInstructorIds = coInstructorRows.map((row) => row.user_id);
+
+      if (
+        parsed.data.primaryInstructorId !== undefined &&
+        coInstructorIds.some(
+          (id) => String(id) === String(parsed.data.primaryInstructorId),
+        )
+      ) {
+        return {
+          error: {
+            status: 409,
+            body: {
+              error:
+                'Cannot set the primary instructor to a user who is currently a co-instructor on this session. Remove them as a co-instructor first.',
+            },
+          },
+        };
+      }
+
       const conflicts = await findSchedulingConflicts(trx, {
         roomId,
-        instructorId: primaryInstructorId,
+        instructorIds: [primaryInstructorId, ...coInstructorIds],
         startsAt,
         durationMinutes,
         excludeSessionId: idResult.data,
@@ -310,6 +329,9 @@ router.patch('/:sessionId', requireRole('staff'), async (req, res, next) => {
       return { session: updated };
     });
 
+    if (outcome.error) {
+      return res.status(outcome.error.status).json(outcome.error.body);
+    }
     if (outcome.conflicts) {
       return res.status(409).json({
         error: 'Session conflicts with an existing session.',
@@ -377,5 +399,11 @@ router.get(
     }
   },
 );
+
+// Goal 5 — co-instructor management, nested under the session it belongs to.
+// Mounted after `authenticate` above, so every route in it already has
+// `req.user`; each route within states its own authorization on top of that,
+// same as every other route in this file.
+router.use('/:sessionId/co-instructors', coInstructorsRouter);
 
 export default router;

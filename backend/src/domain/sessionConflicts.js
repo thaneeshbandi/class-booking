@@ -84,26 +84,46 @@ function describeConflict(type, row) {
  * plain-language, structured conflicts (empty when there are none). Room and
  * instructor are checked independently so a caller double-booked on both
  * counts sees both reasons at once, rather than only the first one found.
+ *
+ * `instructorIds` covers every instructor the proposed interval must be
+ * conflict-free for — the primary instructor, and, once goal 5 adds
+ * co-instructors, every current co-instructor too, since a session's time or
+ * room can change out from under them (007_session_co_instructors.js). Each
+ * id is checked independently so a caller double-booked through more than one
+ * instructor sees every reason at once.
+ *
+ * Checks run one at a time rather than via `Promise.all`: `queryable` is
+ * often a single open transaction (one dedicated connection), and firing
+ * several queries at once against one connection is deprecated in `pg` and
+ * not something to depend on — there is no throughput reason to prefer it
+ * here, since these are a handful of cheap, indexed lookups.
  */
 export async function findSchedulingConflicts(
   queryable,
-  { roomId, instructorId, startsAt, durationMinutes, excludeSessionId },
+  { roomId, instructorIds, startsAt, durationMinutes, excludeSessionId },
 ) {
   const endsAt = computeEndsAt(startsAt, durationMinutes);
-  const [roomConflict, instructorConflict] = await Promise.all([
-    findRoomConflict(queryable, { roomId, startsAt, endsAt, excludeSessionId }),
-    findInstructorConflict(queryable, {
+  const uniqueInstructorIds = [...new Set(instructorIds)];
+
+  const conflicts = [];
+  const roomConflict = await findRoomConflict(queryable, {
+    roomId,
+    startsAt,
+    endsAt,
+    excludeSessionId,
+  });
+  if (roomConflict) conflicts.push(describeConflict('room', roomConflict));
+
+  for (const instructorId of uniqueInstructorIds) {
+    const conflict = await findInstructorConflict(queryable, {
       instructorId,
       startsAt,
       endsAt,
       excludeSessionId,
-    }),
-  ]);
-
-  const conflicts = [];
-  if (roomConflict) conflicts.push(describeConflict('room', roomConflict));
-  if (instructorConflict) {
-    conflicts.push(describeConflict('instructor', instructorConflict));
+    });
+    if (conflict) {
+      conflicts.push({ ...describeConflict('instructor', conflict), instructorId });
+    }
   }
   return conflicts;
 }
