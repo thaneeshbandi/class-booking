@@ -1,9 +1,10 @@
 # Architecture
 
-This describes the system as it actually stands after goals 1–8: accounts and roles, classes,
-sessions, the booking lifecycle, co-instructors, server-side booking search/filter/sort/pagination,
-recurring session generation with attendance CSV export, and the staff-only dashboard. Goal 10
-(membership alerts) and the frontend are not built yet — see "What was deliberately not built" below.
+This describes the system as it actually stands after all ten mandatory goals: accounts and roles,
+classes, sessions, the booking lifecycle with immutable history, co-instructors, server-side booking
+search/filter/sort/pagination, recurring session generation with attendance CSV export, the
+staff-only dashboard, and expiring membership alerts. Only the frontend and the optional stretch
+ideas remain — see "What was deliberately not built" below.
 
 ## Moving pieces
 
@@ -278,16 +279,68 @@ amount) instead of absolute values, which stays correct regardless of how much o
 week's data every other suite has already left behind, and regardless of how many times the file
 itself is re-run.
 
+## Goal 10 — expiring membership alerts
+
+Two routes in `routes/members.js`: `GET /api/members/alerts/expiring` (the current alert population)
+and `POST /api/members/:memberId/alerts/membership-expiry/dismiss` (dismiss one member's current
+alert). Both staff-only, same as the rest of this file.
+
+**The canonical predicate was already decided before this goal was implemented.** When
+`member_alert_dismissals` was first migrated (`010_member_alert_dismissals.js`, back during the
+schema-foundation session), its own comment already spelled out the exact SQL this goal needed:
+
+```sql
+SELECT m.* FROM members m
+ WHERE m.membership_expires_on <= $1          -- studio-local today + 7 days
+   AND NOT EXISTS (SELECT 1 FROM member_alert_dismissals d
+                    WHERE d.member_id = m.id
+                      AND d.dismissed_expiry_date = m.membership_expires_on);
+```
+
+`domain/membershipAlerts.js#listExpiringMemberAlerts` implements this query unchanged — the window
+bound and the anti-join both happen inside PostgreSQL, so nothing downstream re-filters a member back
+out or back in.
+
+**Why a table, not a mutable `is_dismissed` boolean.** A dismissal is not a property of the member,
+it's a statement about one specific expiry date. Recording `(member_id, dismissed_expiry_date)` makes
+"a later expiry date that falls back within seven days makes the alert return" (the brief's own
+words) fall directly out of the anti-join, with no reset logic and no code path that has to remember
+to clear a flag on every expiry edit — exactly the class of bug ("the first time someone forgot, a
+lapsed member would silently vanish") the migration's own comment already named. This project inherited
+that design rather than choosing it fresh; goal 10's job was to build the two routes that finally read
+and write it.
+
+**Dismissal is transactional and re-derives everything from the database.** The member row is locked
+`FOR UPDATE`, its *current* `membership_expires_on` is what gets written to the dismissal row — never
+a client-supplied expiry date, which would let a stale request suppress an alert for a membership that
+has since changed — and the in-window check is re-run fresh against that same locked read before the
+insert. Idempotency is `INSERT ... ON CONFLICT (member_id, dismissed_expiry_date) DO NOTHING`, the
+unique constraint the table already had, rather than a separate read-then-insert existence check: an
+atomic upsert closes the same race a check-then-insert would leave open, for less code.
+
+**Dismissing a member outside the alert window is rejected (409), not silently accepted.** A
+dismissal row not tied to a real, current alert would just be dead data with nothing to suppress, and
+the brief never asks for that — `isWithinAlertWindow` (`domain/membership.js`) re-checks the freshly
+locked row before any insert is attempted.
+
+**`isExpired`/`daysUntilExpiry` are derived per row from the exact same instant the SQL query itself
+filtered against**, not a second, separately-sourced "now" — `listExpiringMemberAlerts` returns
+`studio_today` alongside every row, and the two derived fields are computed from it in JavaScript by
+reusing `isMembershipExpired` (already existed, from goal 4's booking-eligibility rule) rather than
+re-expressing the same "expiry < today" comparison a second time.
+
 ## What was deliberately not built, and why
 
 - **A frontend.** The brief scores ten server-enforced goals; every hour spent on a UI before the
   server-side rules were all correct and tested would have been an hour not spent proving the thing
-  the assignment is actually assessing. It comes after the server-side goals land cleanly.
-- **Goal 10** (membership alerts) — not started. Per the brief's own priority order, it comes after
-  the dashboard (goal 8), now done and tested.
+  the assignment is actually assessing. All ten are done and tested; a frontend is what's left.
 - **An instructor-facing dashboard.** See the goal 8 section above — nothing in the brief asks for
   one, and every metric this endpoint reports is studio-wide, not scoped to what one instructor
   teaches.
+- **A background job, cron schedule, or cached alert count for goal 10.** The alert list is one small,
+  indexed SQL query over a handful of members, read synchronously on demand — there is no "compute
+  the alert list ahead of time" problem here to solve, and the brief never asks for a push
+  notification or scheduled digest, only a badge a staff member sees when they load the page.
 - **A single mega-query (CTEs stitching all seven metrics together) instead of seven small ones.**
   Considered and rejected: a single query touching `sessions`, `bookings`, `classes`, and a
   `generate_series` all at once would be one round trip instead of seven, but at this endpoint's

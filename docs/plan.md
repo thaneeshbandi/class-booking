@@ -12,7 +12,8 @@ happened, not a retrofit.
 | 3 | 2026-09-02, later the same day | Goal 4 — the full booking lifecycle — in the eight phases described in that session's own account below, plus the documentation describing it. |
 | 4 | 2026-09-02, later still | Goal 6 — replaced the minimal, unfiltered `GET /api/bookings` with the full server-side search/filter/sort/pagination/count endpoint, its authorization regression suite, and this documentation update. |
 | 5 | 2026-09-02, later still | Goal 7 — recurring session generation (`POST /api/sessions/recurring`) and attendance CSV export (`GET /api/sessions/:sessionId/attendance.csv`), their test suites, and this documentation update. |
-| 6 (this one) | 2026-09-02, later still | Goal 8 — the staff-only dashboard (`GET /api/dashboard`), its test suite, a pre-existing test-suite flakiness found and fixed along the way, and this documentation update. |
+| 6 | 2026-09-02, later still | Goal 8 — the staff-only dashboard (`GET /api/dashboard`), its test suite, a pre-existing test-suite flakiness found and fixed along the way, and this documentation update. |
+| 7 (this one) | 2026-09-02, later still | Goal 10 — expiring membership alerts (`GET /api/members/alerts/expiring`, `POST /api/members/:memberId/alerts/membership-expiry/dismiss`), its test suite, and this documentation update. |
 
 Session 2's five foundation commits share one timestamp to the minute in `git log`, which is a real
 gap in this record: they clearly did not all land in the same sixty seconds, and no finer-grained
@@ -197,6 +198,52 @@ pre-existing flakiness above), then the fix, a fresh `db:reset`, and three more 
 smoke-tested over real HTTP — the full dashboard payload as staff, and a 403/401 for an instructor and
 an unauthenticated request — before this file was updated.
 
+## Session 7 — goal 10
+
+Read in order before writing any code: `README.md`, `CLAUDE.md`, every `docs/*.md` file, `SUBMISSION.md`,
+the entire backend source, migrations, seed, and test suite, and `git log` — specifically to find and
+read `010_member_alert_dismissals.js`'s own comment before designing anything, since the instruction
+for this session said the alert-dismissal design was already approved and should be preserved, not
+reconsidered. That comment turned out to already contain the exact canonical SQL predicate this goal
+needed, written when the table was first migrated in an earlier session; nothing about the predicate
+itself was invented fresh here. The seed (`seeds/001_demo_data.js`) also turned out to already contain
+a full set of goal-10 fixtures — members at every relevant offset (expired, expiring in 3/5/6 days, and
+several safely outside the window) plus one already-dismissed member — created during the
+schema-foundation session in anticipation of this goal, and used directly as smoke-test material rather
+than re-derived.
+
+Implementation order: the two pure additions to `domain/membership.js` (`isWithinAlertWindow`,
+`daysUntilExpiry`) were written first, alongside the existing `isMembershipExpired` they sit next to,
+since they have no database dependency; the two SQL-touching functions
+(`domain/membershipAlerts.js#listExpiringMemberAlerts`/`getAlertWindowBounds`) came next and were
+smoke-tested directly against the seeded database with a throwaway script before either route existed,
+confirming the query's shape and the seed's own fixtures matched expectations exactly. The two routes
+in `routes/members.js` came last, followed by `tests/membershipAlerts.test.js` and one more round of
+manual smoke-testing against the real running server (recorded verification below) before touching any
+documentation.
+
+Nothing went wrong during this session that required a correction — the targeted test suite (22 tests)
+passed on its first complete run, and no bug was found during the full-suite runs or the real-server
+smoke test. The one genuine judgment call was recognizing, from having just built the dashboard the
+session before, that this endpoint has the same "studio-wide, permanent-fixture-polluted" testing
+problem goal 8 did — confirmed directly by the same throwaway smoke script, which showed several other
+suites' leftover test members (created to exercise goal 4's "expired membership can't book" rule)
+already sitting inside the alert window on a fresh look at the seeded database. Unlike the dashboard's
+pure aggregates, though, every alert row carries a stable member id to key off of, so the fix here was
+simpler than delta-based counting: every assertion checks for the presence or absence of one specific,
+freshly-created member id in the response, never the response's overall contents. `members` also turned
+out to be freely deletable (no `RESTRICT` foreign key points at it besides `bookings.member_id`, which
+this suite's fixtures never touch, and `member_alert_dismissals` cascades) — so, unusually for this
+project by now, the new test file cleans up its own fixtures in `after()` rather than leaving them
+permanently.
+
+What's true and checkable is the verification record: the new test file was run individually first (22
+tests, clean on the first run), then the full suite twice (both clean), `npm run lint` (clean, no fix
+needed), a fresh `db:reset`, the full suite again against it (clean), and the real running server
+smoke-tested over real HTTP — listing alerts as staff, dismissing one, confirming it disappeared,
+directly changing that member's expiry date and confirming the alert returned, and a 403/401 for an
+instructor and an unauthenticated request on both endpoints — before this file was updated.
+
 ## What was cut
 
 Nothing was cut from goal 4's own scope — all eight specified phases, including the full required
@@ -207,7 +254,10 @@ either — recurring generation's full candidate-expansion/conflict/duplicate/DS
 attendance CSV's full authorization/escaping/status battery both landed, matching every test category
 the brief listed. Nothing was cut from goal 8's scope either — all four headline numbers, both
 breakdowns, and the eight-week attendance chart landed, each SQL-aggregated and covered by the
-boundary/authorization/determinism tests the brief's own test-category list asked for. At the project
-level, goal 10 (membership alerts) and the entire frontend have not been started, per the brief's own
-stated priority: finishing fewer goals solidly over starting every goal partially. They're next, in
-that order, matching the brief's numbering.
+boundary/authorization/determinism tests the brief's own test-category list asked for. Nothing was cut
+from goal 10's scope either — the full alert predicate (window boundaries, expiry-today validity),
+dismissal (idempotency, the not-in-window rejection, the reappear/re-suppress lifecycle across an
+expiry change), and the full authorization/IDOR battery the brief's own twenty-item test list asked for
+all landed. All ten mandatory goals are now done and tested. At the project level, only the frontend
+and the optional stretch ideas remain, per the brief's own stated priority — stretch ideas are never
+started before all ten mandatory goals are complete, and none of them have been touched.

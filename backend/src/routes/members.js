@@ -1,16 +1,30 @@
 import { Router } from 'express';
 
+import { daysUntilExpiry, isMembershipExpired, isWithinAlertWindow } from '../domain/membership.js';
+import {
+  getAlertWindowBounds,
+  listExpiringMemberAlerts,
+} from '../domain/membershipAlerts.js';
+import { env } from '../config/env.js';
 import { db } from '../db/knex.js';
 import { authenticate } from '../middleware/authenticate.js';
 import { requireRole } from '../middleware/authorize.js';
+import { idParamSchema } from '../validation/ids.js';
 
 /**
- * Staff-only, read-only. Instructor access to members is not part of the
- * README brief — an instructor's data access is scoped to sessions they are
- * authorized to see, not to the studio's whole membership list — so this is
- * denied by default rather than granted absent a stated reason to allow it.
- * Creating and editing members is goal 1's staff description but not
- * implemented here; this exists to exercise staff-only authorization.
+ * Staff-only, read-only member data. Instructor access to members is not
+ * part of the README brief — an instructor's data access is scoped to
+ * sessions they are authorized to see, not to the studio's whole membership
+ * list — so this is denied by default rather than granted absent a stated
+ * reason to allow it. Creating and editing members is goal 1's staff
+ * description but not implemented here; this exists to exercise staff-only
+ * authorization.
+ *
+ * Goal 10 — membership expiry alerts — also lives in this file:
+ * `GET /alerts/expiring` (the current alert population) and
+ * `POST /:memberId/alerts/membership-expiry/dismiss` (dismiss one member's
+ * current alert). Both staff-only, same as everything else here. See each
+ * route's own comment and `domain/membershipAlerts.js` for the predicate.
  */
 
 const router = Router();
@@ -24,6 +38,30 @@ function serializeMember(row) {
   };
 }
 
+/** `row` carries `studio_today` alongside the member fields
+ * (`listExpiringMemberAlerts`), so `isExpired`/`daysUntilExpiry` are derived
+ * here from the exact same instant the query itself was filtered against —
+ * never a separately-computed "now". */
+function serializeAlert(row) {
+  return {
+    memberId: row.id,
+    fullName: row.full_name,
+    email: row.email,
+    membershipExpiresOn: row.membership_expires_on,
+    isExpired: isMembershipExpired(row.membership_expires_on, row.studio_today),
+    daysUntilExpiry: daysUntilExpiry(row.membership_expires_on, row.studio_today),
+  };
+}
+
+function serializeDismissal(row) {
+  return {
+    memberId: row.member_id,
+    dismissedExpiryDate: row.dismissed_expiry_date,
+    dismissedByUserId: row.dismissed_by_user_id,
+    dismissedAt: row.dismissed_at,
+  };
+}
+
 router.get('/', authenticate, requireRole('staff'), async (_req, res, next) => {
   try {
     const members = await db('members').select('*').orderBy('full_name', 'asc');
@@ -32,5 +70,102 @@ router.get('/', authenticate, requireRole('staff'), async (_req, res, next) => {
     next(error);
   }
 });
+
+// Goal 10 — the current alert population, oldest-expiry-first. `GET` here
+// never collides with the `POST /:memberId/...` route below — different
+// HTTP methods, and `idParamSchema` requires a bare positive integer
+// anyway, so "alerts" could never be mistaken for a member id even if it
+// did.
+router.get('/alerts/expiring', authenticate, requireRole('staff'), async (_req, res, next) => {
+  try {
+    const rows = await listExpiringMemberAlerts(db, env.STUDIO_TIMEZONE);
+    res.json({ alerts: rows.map(serializeAlert) });
+  } catch (error) {
+    next(error);
+  }
+});
+
+/**
+ * Goal 10 — dismiss one member's current membership-expiry alert.
+ *
+ * Transactional and re-derives everything from the database rather than
+ * trusting anything the client sent beyond the member id in the URL: the
+ * member row is locked `FOR UPDATE` and re-read, the alert window is
+ * re-computed fresh, and the dismissal is written against the member's
+ * *current* `membership_expires_on` — never a client-supplied expiry date,
+ * which would let a stale request suppress an alert for a membership that
+ * has since changed.
+ *
+ * Dismissing a member who is not currently within the alert window is
+ * rejected (409) rather than silently accepted: a dismissal row not tied to
+ * a real, current alert would just be dead data with no alert to suppress,
+ * and the brief never asks for that.
+ *
+ * Idempotent via `ON CONFLICT (member_id, dismissed_expiry_date) DO
+ * NOTHING` — the unique constraint already added in migration 010 — rather
+ * than a separate read-then-insert existence check, which would be
+ * race-prone for no benefit an atomic upsert doesn't already provide.
+ */
+router.post(
+  '/:memberId/alerts/membership-expiry/dismiss',
+  authenticate,
+  requireRole('staff'),
+  async (req, res, next) => {
+    try {
+      const idResult = idParamSchema.safeParse(req.params.memberId);
+      if (!idResult.success) {
+        return res.status(400).json({ error: 'Invalid member id.' });
+      }
+      const memberId = idResult.data;
+
+      const outcome = await db.transaction(async (trx) => {
+        const member = await trx('members').where({ id: memberId }).forUpdate().first();
+        if (!member) {
+          return { error: { status: 404, body: { error: 'Member not found.' } } };
+        }
+
+        const { windowEnd } = await getAlertWindowBounds(trx, env.STUDIO_TIMEZONE);
+        if (!isWithinAlertWindow(member.membership_expires_on, windowEnd)) {
+          return {
+            error: {
+              status: 409,
+              body: {
+                error: 'This member is not currently within the membership-expiry alert window.',
+              },
+            },
+          };
+        }
+
+        const [inserted] = await trx('member_alert_dismissals')
+          .insert({
+            member_id: memberId,
+            dismissed_expiry_date: member.membership_expires_on,
+            dismissed_by_user_id: req.user.id,
+          })
+          .onConflict(['member_id', 'dismissed_expiry_date'])
+          .ignore()
+          .returning('*');
+
+        const dismissal =
+          inserted ??
+          (await trx('member_alert_dismissals')
+            .where({
+              member_id: memberId,
+              dismissed_expiry_date: member.membership_expires_on,
+            })
+            .first());
+
+        return { dismissal };
+      });
+
+      if (outcome.error) {
+        return res.status(outcome.error.status).json(outcome.error.body);
+      }
+      res.json({ dismissal: serializeDismissal(outcome.dismissal) });
+    } catch (error) {
+      next(error);
+    }
+  },
+);
 
 export default router;

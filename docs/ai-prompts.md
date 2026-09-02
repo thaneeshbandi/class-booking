@@ -283,3 +283,73 @@ never brought in line with it. Corrected by giving it the same wide-randomized-o
 (`602 + Math.floor(Math.random() * 20_000)` hours), then a fresh `db:reset` to clear the leftover
 instances that had already accumulated, and three consecutive clean full-suite runs before continuing —
 one more than the required two, given this exact class of bug had just been found.
+
+## Implementing membership expiry alerts (goal 10)
+
+### Prompt
+
+One long, specific instruction given at the start of this session. In substance: read `README.md`,
+`CLAUDE.md`, every `docs/*.md` file, `SUBMISSION.md`, the entire backend source, migrations, seed, and
+tests, and `git log`/`git status` first; explicitly verify and understand the existing
+`member_alert_dismissals` table before writing anything, and preserve that design rather than replacing
+it with a mutable boolean; derive the exact alert behavior from the assignment and the existing approved
+design rather than inventing requirements; use explicit staff-only endpoints for listing alerts and
+dismissing one — `GET /api/members/alerts/expiring` and
+`POST /api/members/:memberId/alerts/membership-expiry/dismiss`, following existing route conventions;
+implement the canonical predicate exactly (`expiry <= studio_today + 7` and no dismissal row matching
+the member's *current* expiry date), with expiry-today valid, expired-remains-alerting, and a dismissal
+suppressing only that exact expiry date; use the project's existing studio-timezone semantics, never
+`CURRENT_DATE` unassessed; keep the alert query server-side, one straightforward SQL query, no N+1, no
+cron, no background worker, no cached boolean, no new dependency, no Postgres extension; implement
+dismissal transactionally — re-read the member, verify it's actually in-window at the moment of
+dismissal, insert against the *current* expiry date, make the insert idempotent via `ON CONFLICT` rather
+than a race-prone read-then-insert; write a focused test suite covering twenty listed edge cases
+including exact window boundaries, idempotency, the reappear/re-suppress lifecycle across an expiry
+change, IDOR, and deterministic empty results, using controlled fixture dates and delta-based
+assertions rather than absolute counts given this project's existing permanent test fixtures; run the
+full verification sequence (targeted tests, full suite twice, lint, a fresh `db:reset` and the suite
+again, six specific real-running-server smoke-test scenarios); fix any real bug found with a regression
+test before committing; update the same five `docs/`-plus-`SUBMISSION.md` files only after verification;
+commit as one incremental commit; and close by requiring explicit confirmation that the frontend and
+stretch goals were not started.
+
+### What was produced
+
+Two additions to `domain/membership.js` (`isWithinAlertWindow`, `daysUntilExpiry`) alongside the
+pre-existing `isMembershipExpired`; a new `domain/membershipAlerts.js` (`listExpiringMemberAlerts`,
+`getAlertWindowBounds`) implementing the canonical query unchanged from
+`010_member_alert_dismissals.js`'s own documented predicate; two new routes in `routes/members.js`; and
+`tests/membershipAlerts.test.js` (22 tests). Three new genuine decisions in `docs/decisions.md`:
+preserving the existing table design rather than reconsidering it, rejecting a dismissal request outside
+the current alert window instead of silently no-op'ing it, and `ON CONFLICT DO NOTHING` idempotency over
+a read-then-insert check.
+
+### What was correct
+
+Reading `010_member_alert_dismissals.js` before designing anything paid off directly and completely —
+its own comment already contained the exact canonical SQL query this goal needed, written when the
+table was first migrated, and `domain/membershipAlerts.js#listExpiringMemberAlerts` implements it
+essentially verbatim. The seed also turned out to already contain a full set of goal-10 fixtures (members
+at every relevant offset, one already dismissed), created in anticipation of this goal during the
+schema-foundation session — confirmed directly with a throwaway smoke script against the real seeded
+database before either route existed, and used as real smoke-test material afterward rather than
+invented fresh. Every one of the 22 new tests passed on its first complete run, and the real-server
+smoke test surfaced no bug.
+
+### What was wrong, and what was corrected
+
+Nothing was wrong this session in the sense of a failing test or an incorrect implementation caught and
+fixed — everything passed on the first attempt at every stage (targeted tests, both full-suite runs, the
+fresh-DB run, the real-server smoke test). The one thing genuinely worth recording here, in the same
+spirit as `docs/plan.md`'s account of this session: the *test design*, not the implementation, needed a
+correction in reasoning before any test was written, not after. The first instinct — informed directly
+by having just hit exactly this problem building the goal-8 dashboard the session before — was to assume
+this endpoint would need the same delta-based (before/after snapshot) testing strategy the dashboard
+required, since a throwaway smoke script confirmed the alert list is just as studio-wide and just as
+polluted by other suites' permanent leftover fixtures (several members created by `bookings.test.js` to
+exercise the "expired membership can't book" rule already sit inside the seven-day window on a fresh
+look at the seeded database). Unlike the dashboard's pure counts, though, every alert row carries a
+stable member id — so the simpler, more direct fix was presence/absence checks scoped to one specific
+freshly-created member id, not delta arithmetic. Caught before writing any tests by re-reading the
+dashboard's own test file for the pattern rather than reusing it blind, so nothing here needed a second
+pass.

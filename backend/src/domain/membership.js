@@ -14,3 +14,33 @@
 export function isMembershipExpired(membershipExpiresOn, studioToday) {
   return membershipExpiresOn < studioToday;
 }
+
+/**
+ * Goal 10's alert-window predicate, left half: true once `membershipExpiresOn`
+ * is on or before `windowEnd`. `windowEnd` is always `studioToday + 7 days`,
+ * sourced from PostgreSQL date arithmetic (`(now() AT TIME ZONE tz)::date +
+ * 7`, `domain/membershipAlerts.js#getAlertWindowBounds`) — never recomputed
+ * here, so there is exactly one place day-count arithmetic against "today"
+ * happens. Both arguments are exact `YYYY-MM-DD` strings, so — as with
+ * `isMembershipExpired` above — lexicographic order is calendar order.
+ */
+export function isWithinAlertWindow(membershipExpiresOn, windowEnd) {
+  return membershipExpiresOn <= windowEnd;
+}
+
+function toUtcMs(dateStr) {
+  const [year, month, day] = dateStr.split('-').map(Number);
+  return Date.UTC(year, month - 1, day);
+}
+
+/**
+ * Signed day count from `studioToday` to `membershipExpiresOn`: negative
+ * once already expired, `0` on the day it expires, positive while still
+ * valid. Both arguments are exact `YYYY-MM-DD` civil-date strings, parsed as
+ * UTC-midnight anchors purely so subtraction gives a whole number of days —
+ * no timezone reinterpretation is happening, the same way the test suite's
+ * own `addDays` helpers already do calendar-date arithmetic.
+ */
+export function daysUntilExpiry(membershipExpiresOn, studioToday) {
+  return Math.round((toUtcMs(membershipExpiresOn) - toUtcMs(studioToday)) / 86_400_000);
+}

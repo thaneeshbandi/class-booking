@@ -242,3 +242,46 @@ backend/src/domain/sessionConflicts.js`), not invented for this file.
   ones archived years ago and never scheduled) would turn a chart of what's actually happening into a
   chart mostly full of zeros — the less defensible reading of "breaks bookings down by class" for an
   operational landing view.
+
+## Decision 18
+
+- **Chose:** Kept `member_alert_dismissals` — a dismissal keyed to `(member_id,
+  dismissed_expiry_date)` — as goal 10's storage, rather than reconsidering it.
+- **Rejected:** A mutable `members.alert_dismissed` boolean, cleared whenever staff edit the expiry
+  date.
+- **Why:** This table (and its reasoning) was already decided when the schema was first migrated
+  (`010_member_alert_dismissals.js`), well before this session — the migration's own comment already
+  states the exact query goal 10 needed. A boolean flag would need a reset on every expiry edit, and
+  the first code path that forgot would silently vanish a lapsed member from the alert list — precisely
+  the failure the brief's binder story opens with. The date-keyed table makes "a later expiry date that
+  falls back within seven days brings the alert back" (the brief's own wording) fall directly out of
+  the anti-join, with no reset logic anywhere to forget. This session's actual decision was narrower —
+  build the two routes against that existing design rather than replacing it — but it's recorded here
+  because the instruction explicitly asked for the reasoning not to reconsider it, and that reasoning
+  is worth having written down next to the code it justifies.
+
+## Decision 19
+
+- **Chose:** `POST /:memberId/alerts/membership-expiry/dismiss` rejects (409) dismissing a member who
+  is not currently within the seven-day alert window, rather than accepting the request as a no-op.
+- **Rejected:** Silently accepting the dismissal request regardless of whether the member is currently
+  alerting, inserting a dismissal row for whatever their expiry date happens to be.
+- **Why:** A dismissal row for a member with no active alert is dead data — nothing it could ever
+  suppress unless their expiry date is later moved back to that exact value by coincidence, which is
+  not a real use case the brief describes. Rejecting it loudly instead of accepting it silently also
+  makes a caller's mistake visible (dismissing the wrong member, or a client racing a just-changed
+  expiry date) rather than leaving an inert row nobody asked for.
+
+## Decision 20
+
+- **Chose:** Dismissal idempotency via `INSERT ... ON CONFLICT (member_id, dismissed_expiry_date) DO
+  NOTHING`, with a follow-up `SELECT` only when the insert was skipped (to return the *original*
+  dismissal's data on a repeated call).
+- **Rejected:** A read-then-insert existence check (`SELECT` for an existing row, `INSERT` only if
+  none found).
+- **Why:** A read-then-insert has a window between the two statements where a second concurrent
+  dismissal of the same member could also pass the `SELECT` and attempt its own `INSERT`, racing
+  against the unique constraint anyway — so the check buys nothing but an extra round trip and still
+  needs the constraint as a backstop. `ON CONFLICT DO NOTHING` is atomic by construction and already
+  had a unique index to target (the one `member_alert_dismissals` was built with from the start), so
+  there was no reason to duplicate its job in application code.
