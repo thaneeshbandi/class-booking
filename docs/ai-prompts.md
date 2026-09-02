@@ -5,9 +5,9 @@ than papered over: goals 1–5 (authentication, classes, sessions, co-instructor
 foundation) were built in an earlier session whose actual prompts were not recorded anywhere this
 document can honestly draw from — `git log -- docs/ai-prompts.md` shows this file was never touched
 before the session that built goal 4. Inventing that history now would violate the one rule this file
-has to follow, so it isn't attempted. What follows is complete and accurate for the six sessions that
-built goals 4, 6, 7, 8, and 10, and the final pre-frontend audit, each the one this document's
-respective author actually has a record of.
+has to follow, so it isn't attempted. What follows is complete and accurate for the seven sessions that
+built goals 4, 6, 7, 8, and 10, the final pre-frontend audit, and the frontend itself, each the one
+this document's respective author actually has a record of.
 
 ## Implementing the booking lifecycle (goal 4)
 
@@ -423,3 +423,77 @@ bug, or incorrect implementation was produced and then fixed during this session
 this session surfaced was a pre-existing gap in the codebase, not an error made during the session
 itself, which is why it's recorded under "what was produced" rather than as a caught-and-corrected
 mistake in the usual sense this section otherwise documents.
+
+## Implementing the frontend
+
+### Prompt
+
+One long, specific instruction given at the start of this session. In substance: implement the
+frontend only, as a client of the existing backend — do not change backend business rules unless a
+genuine frontend integration incompatibility is discovered, do not redesign the schema, do not
+duplicate server-side business rules client-side, do not trust frontend role checks as authorization,
+do not create mock APIs for functionality that already exists; use React, Vite, and JavaScript (no
+TypeScript, no Next.js, no large UI component library absent a stated reason); read every backend
+route and validation schema first and build an exact API contract rather than guessing; use one
+centralized API client for cookie/JSON/error handling, never store the auth JWT client-side; build
+pages for every required staff/instructor workflow (dashboard, members, alerts, classes, sessions,
+recurring generation, bookings, booking search, CSV download) rendering exactly what the backend
+returns, never recomputing a metric or a status client-side; role-based navigation is a UX convenience
+only, never authorization; keep data refresh simple (mutate, then refetch — no React Query unless
+already present); audit the frontend for the usual client-side security mistakes (localStorage tokens,
+`dangerouslySetInnerHTML`, embedded secrets); after frontend work, re-run the complete backend test
+suite to prove nothing server-side regressed; exercise the real running application end to end rather
+than stopping at "the frontend builds"; update documentation only where the actual project state
+changed; and close by requiring an explicit confirmation that no stretch goals were implemented.
+
+### What was produced
+
+A React 18 + Vite + plain-JavaScript single-page app (`frontend/`) covering every required workflow:
+an API client layer (one file per backend resource, all built on a shared `api/client.js` for
+credentials/JSON/error handling), `AuthContext` for session state, role-aware routing/navigation
+(`RouteGuards.jsx`, `AppShell.jsx`, both explicit that they are UX-only), small reusable UI primitives,
+and one page per workflow — `DashboardPage`, `MembersPage`, `AlertsPage`, `ClassesPage`,
+`SessionsPage`/`SessionDetailPage`/`RecurringSessionsPage`, `BookingsPage`/`BookingDetailPage`. Two
+small backend additions the frontend genuinely could not function without: `GET /api/rooms` and
+`GET /api/users?role=instructor` (Decision 22), and a hand-rolled CORS middleware (Decision 23) since
+the frontend dev server and backend are different origins. Five separate commits, oldest to newest:
+the backend CORS/rooms/users addition, the frontend shell, dashboard/members/alerts/classes,
+sessions/recurring, and bookings-plus-router-wiring — grouped by logical concern rather than by strict
+chronological increment, since (disclosed plainly, not left implicit) this session wrote the frontend
+in one continuous pass rather than literally page-by-page, and splitting it into commits that looked
+falsely incremental would have misrepresented how the work actually happened.
+
+### What was correct
+
+Reading every backend route and its Zod validation schema before writing the matching frontend code
+paid off directly: every API call in every page matched the backend's actual field names and response
+shapes on the first attempt, confirmed afterward by simulating the exact browser request shape with
+`curl` (cookies, an `Origin` header, identical JSON bodies) end to end — login, dashboard, members,
+rooms/users, session create, session detail, booking create, settle, cancel, attendance CSV, and
+instructor-restricted-access checks all matched what the frontend code expects on the first complete
+run. `npm run lint` and `npm run build` were both clean on the frontend the first time they were run
+against the full page set, and the backend's full test suite stayed clean (twice, then again after a
+fresh `db:reset`) throughout.
+
+### What was wrong, and what was corrected
+
+Two real issues, detailed in full in `docs/plan.md`'s own account of this session rather than repeated
+here — a genuine backend bug and a smaller frontend-only one:
+
+1. **A real CORS bug `curl` could not have caught.** The attendance CSV download reads the
+   `Content-Disposition` response header client-side to name the downloaded file; `Content-Disposition`
+   is not one of the response headers a browser exposes to cross-origin JavaScript by default, and
+   `curl` never enforces that restriction, so every `curl`-based check of this endpoint looked correct
+   throughout implementation. Caught by explicitly reasoning through what a real browser's `fetch`
+   would and would not expose across origins — the one place in this session honesty about a tooling
+   limitation (no interactive browser available) directly produced a better outcome than trusting a
+   tool that couldn't see the problem. Fixed by adding `Access-Control-Expose-Headers:
+   Content-Disposition` to the CORS middleware, with a dedicated regression test
+   (`tests/cors.test.js`) added specifically so this exact bug can never silently return.
+2. **A frontend-only inconsistency**, caught by re-checking the session-edit form's request body
+   against `sessionUpdateSchema` directly rather than assuming the create and edit forms could safely
+   share one shape: the edit form sent a `classId` field the update schema has no field for at all (a
+   session's class cannot change after creation), which Zod's default "strip unknown keys" behavior
+   turned into a silently-ignored no-op rather than a validation error — so the class dropdown looked
+   editable during an edit while never actually doing anything. Fixed by disabling and labeling that
+   field during edit, and by not sending it in the edit request body.

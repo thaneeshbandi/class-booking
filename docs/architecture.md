@@ -1,18 +1,20 @@
 # Architecture
 
-This describes the system as it actually stands after all ten mandatory goals: accounts and roles,
-classes, sessions, the booking lifecycle with immutable history, co-instructors, server-side booking
-search/filter/sort/pagination, recurring session generation with attendance CSV export, the
-staff-only dashboard, and expiring membership alerts. Only the frontend and the optional stretch
-ideas remain — see "What was deliberately not built" below.
+This describes the system as it actually stands after all ten mandatory goals and the frontend that
+consumes them: accounts and roles, classes, sessions, the booking lifecycle with immutable history,
+co-instructors, server-side booking search/filter/sort/pagination, recurring session generation with
+attendance CSV export, the staff-only dashboard, expiring membership alerts, and a React/Vite
+browser-side app for all of it. Only the optional stretch ideas remain — see "What was deliberately
+not built" below.
 
 ## Moving pieces
 
-There are exactly two: a Node/Express backend, and a PostgreSQL database. That's it — no queue, no
-cache, no separate auth service, no ORM beyond a query builder. For a 12-hour-budget, single-team
-application with one write path per resource, a monolith talking directly to one database is the
-simplest thing that is still correct, and every extra moving piece would have been complexity spent
-on infrastructure instead of on the ten goals.
+Three: a Node/Express backend, a PostgreSQL database, and a React/Vite browser-side app. That's it —
+no queue, no cache, no separate auth service, no ORM beyond a query builder, no frontend state library
+beyond React's own. For a 12-hour-budget, single-team application with one write path per resource, a
+monolith talking directly to one database (plus one client of it) is the simplest thing that is still
+correct, and every extra moving piece would have been complexity spent on infrastructure instead of on
+the ten goals.
 
 - **Backend** — `backend/`, a single Node process (`src/server.js` → `src/app.js`), Express for
   routing, [Knex](https://knexjs.org) as the query builder/migration runner over `pg`. Runs as one
@@ -20,10 +22,14 @@ on infrastructure instead of on the ten goals.
   (including waitlist promotion) happens synchronously inside the HTTP request that triggered it.
 - **Database** — PostgreSQL 17, run locally in Docker during development
   (`docker run ... postgres:17`, see `backend/.env.example`). Not yet deployed; the README's suggested
-  path (Supabase for the database, Render for the backend) is the intended target once a frontend
-  exists to deploy alongside it.
+  path (Supabase for the database, Render for the backend, Vercel for the frontend) is the intended
+  deployment target.
+- **Frontend** — `frontend/`, a React 18 single-page app built with Vite, plain JavaScript (no
+  TypeScript, matching the backend), and hand-written CSS (no component library — see "Frontend
+  architecture" below). Runs entirely in the browser; it holds no server-side state of its own and
+  performs no business logic the backend doesn't already enforce.
 
-Both run from the same `backend/` package and share one configuration path
+The backend runs from the `backend/` package and shares one configuration path
 (`src/config/env.js`, validated with Zod at import time) and one Knex instance
 (`src/db/knex.js`) — the server, the migration runner, the seed script, and the test suite all
 construct their database connection identically, so there is no way for "how the tests connect" and
@@ -31,14 +37,22 @@ construct their database connection identically, so there is no way for "how the
 
 ## How they talk to each other
 
-A browser (once one exists) or any HTTP client talks to the backend over plain JSON REST —
-`POST /api/auth/login`, `GET /api/sessions`, `POST /api/bookings/:id/cancel`, and so on, all under
-`/api`. Authentication is a signed, stateless session cookie (`src/auth/tokens.js` — a hand-rolled
-HS256 JWT carrying only a user id and expiry, verified with `crypto.timingSafeEqual`); the cookie
-proves identity only, never role or account status, both of which are re-read from `users` on every
-single request (`src/middleware/authenticate.js`). That is a deliberate trade-off: a role change or a
-deactivated account takes effect on the very next request instead of waiting for a 12-hour token to
-expire, at the cost of one extra `SELECT` per request.
+The frontend (or any HTTP client) talks to the backend over plain JSON REST — `POST /api/auth/login`,
+`GET /api/sessions`, `POST /api/bookings/:id/cancel`, and so on, all under `/api`. Authentication is a
+signed, stateless session cookie (`src/auth/tokens.js` — a hand-rolled HS256 JWT carrying only a user
+id and expiry, verified with `crypto.timingSafeEqual`); the cookie proves identity only, never role or
+account status, both of which are re-read from `users` on every single request
+(`src/middleware/authenticate.js`). That is a deliberate trade-off: a role change or a deactivated
+account takes effect on the very next request instead of waiting for a 12-hour token to expire, at the
+cost of one extra `SELECT` per request.
+
+In local development the frontend (Vite dev server, `:5173`) and backend (`:3000`) are different
+origins, so every request between them is cross-origin — `src/middleware/cors.js` is a small
+hand-rolled CORS layer (no `cors` package, matching this codebase's standing preference for a few
+lines of plain code over a dependency for something this small) allowing exactly the configured
+`FRONTEND_ORIGIN` with credentials. A wildcard origin is never used: `Access-Control-Allow-Origin: *`
+cannot be combined with `Access-Control-Allow-Credentials: true`, and credentials (the httpOnly
+session cookie) are exactly what a cross-origin request here needs to carry.
 
 The backend talks to Postgres exclusively through Knex, either as ad-hoc queries or as an explicit
 `db.transaction(async trx => { ... })` for anything that reads-then-writes under a concurrency
@@ -46,15 +60,52 @@ guarantee. There is no ORM layer translating rows into domain objects — routes
 serialize them into the JSON shape a client gets, and domain logic (`src/domain/*.js`) is small, pure
 functions and query helpers imported by routes, not a framework of its own.
 
+## Frontend architecture
+
+`frontend/src/` is organized by concern, not by page:
+
+- **`api/`** — one file per backend resource (`members.js`, `sessions.js`, `bookings.js`, …), each a
+  thin set of functions mapping straight onto the actual REST contract (exact paths, exact body
+  shapes) — nothing here invents a field the backend doesn't return. Every one of them is built on
+  **`api/client.js`**, the single place `credentials: 'include'`, JSON encoding/decoding, and error
+  normalization (`ApiError`, carrying the real HTTP status and the backend's own response body) live —
+  so no page hand-rolls its own `fetch` call or its own idea of what an error response looks like.
+- **`context/AuthContext.jsx`** — the only place current-user/session state lives, sourced from
+  `GET /api/auth/me` on load and never assumed from anything stored client-side (no token in
+  `localStorage`, ever — the browser sends whatever cookie it already holds; nothing in this app can
+  read the cookie's value even if it wanted to). A registered "unauthorized" handler
+  (`api/client.js#setUnauthorizedHandler`) lets this context react the moment any request anywhere in
+  the app surfaces a 401 — a token expiring or an account being deactivated mid-session — without every
+  page separately deciding what that means.
+- **`components/RouteGuards.jsx`, `components/AppShell.jsx`** — role-aware routing and the sidebar
+  navigation. Explicitly a UX convenience only, stated directly in both files' own comments: every
+  page behind a guard still makes its own requests, and the backend independently authorizes every one
+  of those regardless of what the sidebar chose to show. Removing every guard in this directory would
+  change nothing about what data an unauthorized user could actually retrieve.
+- **`components/`** (the rest) — small, reused UI primitives (`Badge`, `States` for
+  loading/empty/error, `Modal`/`ConfirmDialog`, `Pagination`) so no individual page reinvents its own
+  loading spinner or error banner.
+- **`pages/`** — one file per required workflow (dashboard, members, alerts, classes, sessions,
+  recurring generation, bookings), each fetching directly from `api/` and rendering exactly what the
+  backend returned. No page recomputes a metric, a status, or a total the backend already computed —
+  the dashboard's numbers, the alert list's expired/expiring-soon classification, and the booking
+  search's total/pagination all render server-supplied values as-is.
+
+**Data refresh is deliberately simple**: no client-side cache, no React Query. Every mutation (create a
+member, dismiss an alert, cancel a booking, …) is followed by re-fetching the affected list from the
+server, so what's on screen is never more than one request behind the database.
+
 ## Where each piece runs
 
-Today, everywhere is the same machine: the Node process and the Postgres container both run locally.
-Nothing in the code assumes that, though — `DATABASE_URL` and `DATABASE_SSL` (`knexfile.js`) are the
-only things that change between "a local Docker container" and "a managed Postgres instance with a
-certificate outside Node's trust store," and `APP_DB_ROLE` (`src/db/grants.js`) is how a deployed
-environment can run the application under a role with fewer privileges than the migration owner
-(concretely: a role that cannot `UPDATE`/`DELETE`/`TRUNCATE` `booking_events`, so goal 9's
-immutability holds even against a compromised or buggy application, not only against a well-behaved
+Today, everywhere is the same machine: the Node process, the Postgres container, and the Vite dev
+server all run locally. Nothing in the code assumes that, though — `DATABASE_URL` and `DATABASE_SSL`
+(`knexfile.js`) are the only things that change between "a local Docker container" and "a managed
+Postgres instance with a certificate outside Node's trust store," `FRONTEND_ORIGIN`/`VITE_API_BASE_URL`
+are the only things that change between local dev and a deployed frontend/backend pair on different
+hosts, and `APP_DB_ROLE` (`src/db/grants.js`) is how a deployed environment can run the application
+under a role with fewer privileges than the migration owner (concretely: a role that cannot
+`UPDATE`/`DELETE`/`TRUNCATE` `booking_events`, so goal 9's immutability holds even against a
+compromised or buggy application, not only against a well-behaved
 one).
 
 ## One representative request path, end to end: `POST /api/bookings/:bookingId/cancel`
@@ -352,9 +403,20 @@ re-expressing the same "expiry < today" comparison a second time.
 
 ## What was deliberately not built, and why
 
-- **A frontend.** The brief scores ten server-enforced goals; every hour spent on a UI before the
-  server-side rules were all correct and tested would have been an hour not spent proving the thing
-  the assignment is actually assessing. All ten are done and tested; a frontend is what's left.
+- **A frontend client-side cache (React Query, Redux, or similar).** Every mutation is followed by a
+  plain re-fetch of the affected list; at this scale (a handful of pages, no offline requirement, no
+  optimistic-update need the brief asks for) that is simpler to read, simpler to get right, and never
+  drifts from the server the way a stale cache entry could — a request-response pair a page reasons
+  about directly, not a cache-invalidation problem to solve.
+- **A frontend component library (MUI, Ant Design, etc.) or CSS framework (Tailwind).** The brief
+  explicitly warns against a large UI dependency absent a stated reason for one; this app's actual
+  surface (tables, forms, badges, a modal, a bar chart) is small enough that hand-written CSS
+  (`frontend/src/styles.css`) is less code and less to audit than adopting and theming a library for
+  it.
+- **TypeScript on the frontend.** The backend is plain JavaScript throughout; matching that (per the
+  assignment's own "use the existing... JavaScript" instruction for the frontend) keeps one language
+  and one set of conventions across the whole stack rather than a type boundary that would only ever
+  describe the same contract `docs/schema.md`/each route file already documents in prose.
 - **An instructor-facing dashboard.** See the goal 8 section above — nothing in the brief asks for
   one, and every metric this endpoint reports is studio-wide, not scoped to what one instructor
   teaches.

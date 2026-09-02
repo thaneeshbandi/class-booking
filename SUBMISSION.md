@@ -23,10 +23,10 @@ request can take up to a minute.>
 
 | Layer | What you used | Why |
 |-------|---------------|-----|
-| Frontend | Not built yet | See `docs/architecture.md` — deliberately deferred until the server-side goals it depends on were done and tested |
+| Frontend | React 18 + Vite, plain JavaScript, hand-written CSS (no component library, no TypeScript) | See `docs/architecture.md` — deliberately deferred until the server-side goals it depends on were done, tested, and audited |
 | Backend | Node.js, Express, Knex (query builder + migrations) over `pg` | See `docs/decisions.md` |
 | Database | PostgreSQL 17 (Docker locally; not yet deployed) | See `docs/schema.md` |
-| Hosting | Not deployed yet | No frontend exists yet to deploy alongside the backend |
+| Hosting | Not deployed yet | Frontend and backend are both complete; deployment itself hasn't happened yet |
 
 ## Goal checklist
 

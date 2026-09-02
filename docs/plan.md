@@ -14,7 +14,8 @@ happened, not a retrofit.
 | 5 | 2026-09-02, later still | Goal 7 — recurring session generation (`POST /api/sessions/recurring`) and attendance CSV export (`GET /api/sessions/:sessionId/attendance.csv`), their test suites, and this documentation update. |
 | 6 | 2026-09-02, later still | Goal 8 — the staff-only dashboard (`GET /api/dashboard`), its test suite, a pre-existing test-suite flakiness found and fixed along the way, and this documentation update. |
 | 7 | 2026-09-02, later still | Goal 10 — expiring membership alerts (`GET /api/members/alerts/expiring`, `POST /api/members/:memberId/alerts/membership-expiry/dismiss`), its test suite, and this documentation update. |
-| 8 (this one) | 2026-09-02, later still | Final pre-frontend audit — documentation consistency, security/timezone/state-machine/SQL review, and (found during the audit) implementing the missing goal-1 member create/edit endpoints. |
+| 8 | 2026-09-02, later still | Final pre-frontend audit — documentation consistency, security/timezone/state-machine/SQL review, and (found during the audit) implementing the missing goal-1 member create/edit endpoints. |
+| 9 (this one) | 2026-09-02, later still | The frontend — a React/Vite app covering every mandatory-goal workflow, two small backend additions it genuinely needed (CORS, room/instructor listing), a real cross-origin CSV-download bug found and fixed, and this documentation update. |
 
 Session 2's five foundation commits share one timestamp to the minute in `git log`, which is a real
 gap in this record: they clearly did not all land in the same sixty seconds, and no finer-grained
@@ -292,6 +293,60 @@ run; the full verification sequence (targeted tests, full suite twice, lint, a f
 suite again, a real-server smoke test covering all ten goals plus the new endpoints) was then re-run in
 full, since the audit was no longer purely read-only.
 
+## Session 9 — the frontend
+
+Read in order before writing any code: `README.md`, `CLAUDE.md`, `SUBMISSION.md`, every `docs/*.md`
+file, every backend route and its validation schema, and the existing (empty, scaffold-only)
+`frontend/` directory — specifically so the API layer would be built against the actual request/
+response shapes rather than a guess, matching the milestone's own explicit instruction.
+
+Implementation order: reading every route file first surfaced one real integration gap before any
+frontend code was written — nothing in the API could list rooms or instructors, only validate a single
+client-supplied id, so the session-create and recurring-generation forms could not function without
+either a blind numeric-id text field or two small new backend endpoints. Added `GET /api/rooms` and
+`GET /api/users` (Decision 22) and CORS (Decision 23, `src/middleware/cors.js`) first, each with its
+own test file, before any frontend file existed — the frontend was always going to need a working
+backend to integrate against, not the other way around. The frontend itself was then built bottom-up:
+the API client and error normalization first (`api/client.js`), then auth state
+(`context/AuthContext.jsx`), then routing/navigation (`App.jsx`, `components/RouteGuards.jsx`,
+`components/AppShell.jsx`), then one page per required workflow, each checked against its exact backend
+response shape as it was written rather than assumed from memory of having built that backend.
+
+Verification leaned on `curl` heavily — simulating the browser's exact request shape (cookies, an
+`Origin` header, the same JSON bodies the frontend code sends) — precisely because interactive browser
+tooling was not available this session (no Chrome extension connected). This was disclosed to the user
+rather than silently substituted for; where it mattered, `curl`'s own limitations were treated as a
+real constraint on what could be verified, not papered over. That limitation is exactly what caused one
+real bug to be found later than it should have been:
+
+**A real bug, and why `curl` couldn't have caught it sooner.** The attendance CSV download's filename
+logic (`api/client.js#downloadResponse`) reads the `Content-Disposition` header from the fetch
+`Response` — but `Content-Disposition` is not one of the response headers a browser exposes to
+cross-origin JavaScript by default, and `curl` never enforces that restriction at all, so every `curl`
+based check of the CSV endpoint showed the header present and looked correct. The bug was caught only
+by reasoning explicitly about what a *real* browser's `fetch` would and would not expose across origins
+— not by any tool run in this session — and confirmed by checking the CORS specification's response-
+header safelist directly. Fixed by adding `Access-Control-Expose-Headers: Content-Disposition` to
+`src/middleware/cors.js` (Decision 23), with `tests/cors.test.js` added specifically to pin this down
+so it can never silently regress.
+
+**The other thing corrected along the way** was a smaller frontend-only inconsistency, caught by
+re-reading `sessionUpdateSchema` against the session-edit form rather than assuming the create and edit
+forms could safely share one body shape: the edit form was building its request body with a `classId`
+field that `PATCH /api/sessions/:id` has no field for at all (a session's class cannot change after
+creation) — Zod's default "strip unknown keys" behavior meant this was never a hard error, only a
+silently-ignored field, so the class dropdown looked editable during an edit while doing nothing.
+Fixed by disabling that field (and labeling it) specifically when editing, and by not sending `classId`
+in the edit request body at all.
+
+What's true and checkable is the verification record: `npm run lint` and `npm run build` both clean on
+the frontend at every stage they were run; the backend's full test suite (`npm test
+--test-concurrency=1`) run twice, a fresh `db:reset`, and the suite run again against it — all clean,
+391 tests passing with the one pre-existing skip carried over from earlier sessions; and the `curl`
+-simulated end-to-end flow (login → dashboard → members → rooms/users → session create → session detail
+→ booking create → settle/cancel → attendance CSV → instructor-restricted-access checks) run against
+the real backend before any documentation was touched.
+
 ## What was cut
 
 Nothing was cut from goal 4's own scope — all eight specified phases, including the full required
@@ -308,6 +363,14 @@ dismissal (idempotency, the not-in-window rejection, the reappear/re-suppress li
 expiry change), and the full authorization/IDOR battery the brief's own twenty-item test list asked for
 all landed. Goal 1's member create/edit gap, present since the earliest session this record can see,
 was found and closed during the final audit rather than left undocumented. All ten mandatory goals are
-now genuinely done and tested. At the project level, only the frontend and the optional stretch ideas
-remain, per the brief's own stated priority — stretch ideas are never started before all ten mandatory
-goals are complete, and none of them have been touched.
+now genuinely done and tested.
+
+The frontend covers every required workflow the milestone listed — dashboard, member CRUD, alerts and
+dismissal, class CRUD/archive/restore, session CRUD, co-instructor management, recurring generation
+with created/skipped rendered in full, booking search/filter/sort/pagination, booking create/cancel/
+settle, the immutable history timeline, and the attendance CSV download — nothing from that list was
+skipped. What was not attempted, deliberately, per the milestone's own restriction: live interactive
+browser testing (no Chrome extension was connected this session; verification instead leaned on
+`curl`-simulated requests and a careful reading of the actual browser CORS/fetch specification where
+`curl` alone could not tell the whole story — disclosed above, not hidden), and the stretch ideas, which
+remain untouched at the project level, same as every prior session.

@@ -302,3 +302,49 @@ backend/src/domain/sessionConflicts.js`), not invented for this file.
   fix it: a missing mandatory capability discovered while verifying mandatory capabilities is closer to
   a defect than a feature request, and the fix was small, additive, and followed an existing pattern
   (`routes/classes.js`'s create/update shape) exactly rather than inventing new design.
+
+## Decision 22
+
+- **Chose:** Two small, read-only, staff-scoped-where-needed endpoints — `GET /api/rooms` and
+  `GET /api/users?role=instructor` — added specifically for the frontend milestone.
+- **Rejected:** Leaving the frontend's session-create, recurring-generation, and add-co-instructor
+  forms without any way to list valid rooms/instructors, forcing staff to type a numeric database id
+  from memory.
+- **Why:** The frontend brief explicitly forbids duplicating backend business rules and mock APIs for
+  functionality that already exists, but also explicitly allows a backend change "if a genuine frontend
+  integration incompatibility is discovered" — and this is exactly that: none of the ten goals ever
+  needed to *list* rooms or instructors, only to validate a single client-supplied id
+  (`findActiveInstructor` in `domain/instructors.js`), so no such endpoint existed anywhere in the API
+  surface before this. `GET /api/users` stays staff-only and always filters to `is_active = true` — the
+  only rows the write paths that actually consume one of these ids would ever accept — so this listing
+  can never offer a choice the backend would then reject.
+
+## Decision 23
+
+- **Chose:** A hand-rolled CORS middleware (`backend/src/middleware/cors.js`, ~20 lines) over the
+  `cors` npm package.
+- **Rejected:** `npm install cors`.
+- **Why:** This project already has a standing pattern of hand-writing something this size rather than
+  taking a dependency for it — `auth/cookies.js` parses the `Cookie` header itself rather than adding
+  `cookie-parser`, and `domain/csv.js` is a five-line RFC-4180 escaper rather than a CSV library. CORS
+  for exactly one allowed origin, with credentials, is the same shape of problem: a handful of response
+  headers, not a configuration surface broad enough to justify an external package. The one header this
+  app actually needed and would have been easy to forget by hand —
+  `Access-Control-Expose-Headers: Content-Disposition`, without which the browser cannot read the
+  attendance CSV's real filename — was in fact missed on the first pass and only caught by testing the
+  real download flow end to end (see `docs/ai-prompts.md`), which is exactly the kind of mistake a
+  battle-tested library would have prevented for free. Kept anyway: the fix was one line once found,
+  and it is now pinned down by a regression test (`tests/cors.test.js`) the same way any other
+  hand-rolled piece of this codebase already is.
+
+## Decision 24
+
+- **Chose:** No client-side data cache on the frontend (no React Query, no Redux) — every mutation is
+  followed by a plain re-fetch of whatever list it affected.
+- **Rejected:** Adding React Query for automatic caching/revalidation.
+- **Why:** The frontend brief explicitly says not to add it "unless it is already installed or there is
+  a compelling existing reason," and there wasn't one: this app has no offline requirement, no
+  background-sync need, and no page where refetching a list after a mutation is expensive at this
+  scale. A plain "mutate, then refetch" is also simpler to verify correct — there is no cache-
+  invalidation logic to get wrong, only a request-response pair each page already has to reason about
+  for its initial load anyway.
