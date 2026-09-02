@@ -23,10 +23,10 @@ request can take up to a minute.>
 
 | Layer | What you used | Why |
 |-------|---------------|-----|
-| Frontend | | |
-| Backend | | |
-| Database | | |
-| Hosting | | |
+| Frontend | Not built yet | See `docs/architecture.md` — deliberately deferred until the server-side goals it depends on were done and tested |
+| Backend | Node.js, Express, Knex (query builder + migrations) over `pg` | See `docs/decisions.md` |
+| Database | PostgreSQL 17 (Docker locally; not yet deployed) | See `docs/schema.md` |
+| Hosting | Not deployed yet | No frontend exists yet to deploy alongside the backend |
 
 ## Goal checklist
 
@@ -34,16 +34,16 @@ Mark each honestly. Partial is fine — say what is partial.
 
 | # | Goal | Status | Notes |
 |---|------|--------|-------|
-| 1 | | Done / Partial / Not done | |
-| 2 | | | |
-| 3 | | | |
-| 4 | | | |
-| 5 | | | |
-| 6 | | | |
-| 7 | | | |
-| 8 | | | |
-| 9 | | | |
-| 10 | | | |
+| 1 | Accounts and roles | Done | Server-enforced staff/instructor split throughout; see `docs/architecture.md` |
+| 2 | Classes | Done | Create/edit/archive/restore |
+| 3 | Sessions inside classes | Done | Create/edit/delete with server-side room/instructor conflict detection |
+| 4 | Booking lifecycle | Done | Full state machine, session-lock concurrency protocol, FIFO waitlist promotion, immutable history; see `docs/decisions.md` and `docs/architecture.md` |
+| 5 | Co-instructors | Done | Staff-only add/remove; instructor sees own-sessions list (primary + co-instructor) |
+| 6 | Booking search/filter/sort/pagination | Not done | Only a minimal unfiltered `GET /api/bookings` exists so far |
+| 7 | Recurring schedule + CSV export | Not done | |
+| 8 | Dashboard | Not done | |
+| 9 | Immutable booking history | Done | Delivered as part of goal 4 — append-only `booking_events`, enforced by trigger and (optionally) revoked grants |
+| 10 | Expiring membership alerts | Not done | The supporting table (`member_alert_dismissals`) exists in the schema; no endpoint yet |
 
 ## How much time did you actually spend?
 
