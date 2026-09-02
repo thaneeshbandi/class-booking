@@ -598,3 +598,274 @@ describe('POST /api/bookings/:bookingId/cancel — cancellation and waitlist pro
     assert.equal(anyWaitlisted, undefined, 'I2: no waitlisted booking may remain once seats are free');
   });
 });
+
+function settleViaApi(cookie, bookingId, body) {
+  return server.request({
+    method: 'POST',
+    path: `/api/bookings/${bookingId}/settle`,
+    cookie,
+    body,
+  });
+}
+
+/** A booked booking on a fresh session, with the session's `starts_at` moved
+ * to `hoursFromNow` (which may be in the past) only *after* the booking is
+ * created — booking creation itself requires `now() < starts_at`, so the
+ * session is always created safely in the future and then relocated. */
+async function bookedBookingIn(hoursFromNow, overrides = {}) {
+  const { durationMinutes = 60, capacity = 5 } = overrides;
+  const session = await createRawSession({ startsAt: futureDate(48), durationMinutes, capacity });
+  const member = await createMember();
+  const cookie = await loginAs(fixture.staff);
+  const booking = await bookViaApi(cookie, session.id, member.id);
+  await db('sessions').where({ id: session.id }).update({ starts_at: futureDate(hoursFromNow) });
+  return { session, member, booking };
+}
+
+describe('POST /api/bookings/:bookingId/settle — settlement, history and authorization', () => {
+  it('settles a booked booking as attended once the session has finished', async () => {
+    const { booking } = await bookedBookingIn(-3); // started and finished 2 hours ago
+    const cookie = await loginAs(fixture.staff);
+    const res = await settleViaApi(cookie, booking.id, { status: 'attended' });
+    assert.equal(res.status, 200, res.raw);
+    assert.equal(res.json.booking.status, 'attended');
+  });
+
+  it('settles a booked booking as no_show', async () => {
+    const { booking } = await bookedBookingIn(-3);
+    const cookie = await loginAs(fixture.staff);
+    const res = await settleViaApi(cookie, booking.id, { status: 'no_show' });
+    assert.equal(res.status, 200, res.raw);
+    assert.equal(res.json.booking.status, 'no_show');
+  });
+
+  it('rejects an invalid settlement status', async () => {
+    const { booking } = await bookedBookingIn(-3);
+    const cookie = await loginAs(fixture.staff);
+    const res = await settleViaApi(cookie, booking.id, { status: 'booked' });
+    assert.equal(res.status, 400, res.raw);
+  });
+
+  it('rejects settling a waitlisted booking', async () => {
+    const session = await createRawSession({ startsAt: futureDate(-3), durationMinutes: 60, capacity: 1 });
+    const [holder, waiter] = await Promise.all([createMember(), createMember()]);
+    // Book both while the session is still in the future, then move it into
+    // the past — settlement timing is what's under test, not booking timing.
+    await db('sessions').where({ id: session.id }).update({ starts_at: futureDate(24) });
+    const cookie = await loginAs(fixture.staff);
+    await bookViaApi(cookie, session.id, holder.id);
+    const waitlisted = await bookViaApi(cookie, session.id, waiter.id);
+    await db('sessions').where({ id: session.id }).update({ starts_at: futureDate(-3) });
+
+    const res = await settleViaApi(cookie, waitlisted.id, { status: 'attended' });
+    assert.equal(res.status, 409, res.raw);
+  });
+
+  it('rejects settling an already-cancelled booking', async () => {
+    const { booking } = await bookedBookingIn(24);
+    const cookie = await loginAs(fixture.staff);
+    const cancelRes = await cancelViaApi(cookie, booking.id);
+    assert.equal(cancelRes.status, 200, cancelRes.raw);
+
+    const res = await settleViaApi(cookie, booking.id, { status: 'attended' });
+    assert.equal(res.status, 409, res.raw);
+  });
+
+  it('rejects re-settling an already-attended booking (attended -> no_show)', async () => {
+    const { booking } = await bookedBookingIn(-3);
+    const cookie = await loginAs(fixture.staff);
+    const first = await settleViaApi(cookie, booking.id, { status: 'attended' });
+    assert.equal(first.status, 200, first.raw);
+
+    const second = await settleViaApi(cookie, booking.id, { status: 'no_show' });
+    assert.equal(second.status, 409, second.raw);
+  });
+
+  it('rejects settlement before the session has started', async () => {
+    const { booking } = await bookedBookingIn(24);
+    const cookie = await loginAs(fixture.staff);
+    const res = await settleViaApi(cookie, booking.id, { status: 'attended' });
+    assert.equal(res.status, 409, res.raw);
+  });
+
+  it('rejects settlement while the session is currently running', async () => {
+    const { booking } = await bookedBookingIn(-0.25, { durationMinutes: 60 }); // started 15 min ago, runs 60
+    const cookie = await loginAs(fixture.staff);
+    const res = await settleViaApi(cookie, booking.id, { status: 'attended' });
+    assert.equal(res.status, 409, res.raw);
+  });
+
+  it('lets the primary instructor settle a booking on their own session', async () => {
+    // Created safely in the future so the booking succeeds, then relocated
+    // into the past — same reasoning as `bookedBookingIn`.
+    const session = await createRawSession({ startsAt: futureDate(48), durationMinutes: 60, capacity: 5 });
+    const member = await createMember();
+    const staffCookie = await loginAs(fixture.staff);
+    const booking = await bookViaApi(staffCookie, session.id, member.id);
+    await db('sessions').where({ id: session.id }).update({ starts_at: futureDate(-3) });
+
+    const instructorCookie = await loginAs(fixture.instructorA);
+    const res = await settleViaApi(instructorCookie, booking.id, { status: 'attended' });
+    assert.equal(res.status, 200, res.raw);
+  });
+
+  it('lets a co-instructor settle, denies an unrelated instructor, and revokes access immediately on removal', async () => {
+    // All three bookings must exist before the session is relocated into the
+    // past (booking creation requires an unstarted session); the
+    // co-instructor removal itself carries no timing restriction, so it runs
+    // after relocation, between the "still assigned" and "removed" checks.
+    const session = await createRawSession({ startsAt: futureDate(48), durationMinutes: 60, capacity: 5 });
+    await db('session_co_instructors').insert({
+      session_id: session.id,
+      user_id: fixture.instructorB.id,
+      session_primary_instructor_id: session.primary_instructor_id,
+    });
+    const staffCookie = await loginAs(fixture.staff);
+    const [memberForCo, memberForUnrelated, memberForRemoval] = await Promise.all([
+      createMember(),
+      createMember(),
+      createMember(),
+    ]);
+    const bookingForCo = await bookViaApi(staffCookie, session.id, memberForCo.id);
+    const bookingForUnrelated = await bookViaApi(staffCookie, session.id, memberForUnrelated.id);
+    const bookingForRemoval = await bookViaApi(staffCookie, session.id, memberForRemoval.id);
+    const unrelatedInstructor = await db('users')
+      .where({ role: 'instructor', is_active: true })
+      .whereNotIn('id', [fixture.instructorA.id, fixture.instructorB.id])
+      .first();
+    assert.ok(unrelatedInstructor, 'seed data requires a third instructor unrelated to this session');
+
+    await db('sessions').where({ id: session.id }).update({ starts_at: futureDate(-3) });
+
+    const coCookie = await loginAs(fixture.instructorB);
+    const coRes = await settleViaApi(coCookie, bookingForCo.id, { status: 'attended' });
+    assert.equal(coRes.status, 200, coRes.raw);
+
+    const unrelatedCookie = await loginAs(unrelatedInstructor);
+    const unrelatedRes = await settleViaApi(unrelatedCookie, bookingForUnrelated.id, { status: 'attended' });
+    assert.equal(unrelatedRes.status, 403);
+
+    await db('session_co_instructors')
+      .where({ session_id: session.id, user_id: fixture.instructorB.id })
+      .delete();
+    const afterRemovalRes = await settleViaApi(coCookie, bookingForRemoval.id, { status: 'attended' });
+    assert.equal(afterRemovalRes.status, 403);
+  });
+
+  it('ignores a sessionId supplied in the body — authorization is derived only from the booking', async () => {
+    const { booking } = await bookedBookingIn(-3);
+    const otherSession = await createRawSession({ startsAt: futureDate(-3), capacity: 5 });
+    const cookie = await loginAs(fixture.staff);
+    const res = await settleViaApi(cookie, booking.id, {
+      status: 'attended',
+      sessionId: String(otherSession.id),
+    });
+    assert.equal(res.status, 200, res.raw);
+    assert.equal(String(res.json.booking.sessionId), String(booking.sessionId));
+  });
+
+  it('records an optional note as a separate note event', async () => {
+    const { booking } = await bookedBookingIn(-3);
+    const cookie = await loginAs(fixture.staff);
+    const res = await settleViaApi(cookie, booking.id, { status: 'no_show', note: 'Called, no answer.' });
+    assert.equal(res.status, 200, res.raw);
+
+    const noteEvent = await db('booking_events')
+      .where({ booking_id: booking.id, event_type: 'note' })
+      .first();
+    assert.equal(noteEvent.note, 'Called, no answer.');
+  });
+
+  it('denies an unauthenticated request', async () => {
+    const { booking } = await bookedBookingIn(-3);
+    const res = await settleViaApi(undefined, booking.id, { status: 'attended' });
+    assert.equal(res.status, 401);
+  });
+
+  it('404s for an unknown booking id', async () => {
+    const cookie = await loginAs(fixture.staff);
+    const res = await settleViaApi(cookie, '999999999', { status: 'attended' });
+    assert.equal(res.status, 404);
+  });
+});
+
+describe('GET /api/bookings/:bookingId', () => {
+  it('returns the booking and its full event history, ordered by occurred_at then id, for staff', async () => {
+    const { session, booking } = await bookedBookingIn(-3);
+    const cookie = await loginAs(fixture.staff);
+    await settleViaApi(cookie, booking.id, { status: 'attended', note: 'On time.' });
+
+    const res = await server.request({ method: 'GET', path: `/api/bookings/${booking.id}`, cookie });
+    assert.equal(res.status, 200, res.raw);
+    assert.equal(res.json.booking.status, 'attended');
+    assert.equal(String(res.json.booking.sessionId), String(session.id));
+
+    const types = res.json.events.map((e) => e.eventType);
+    assert.deepEqual(types, ['created', 'status_changed', 'note']);
+    const occurredAts = res.json.events.map((e) => new Date(e.occurredAt).getTime());
+    assert.deepEqual(occurredAts, [...occurredAts].sort((a, b) => a - b));
+  });
+
+  it('is visible to the primary instructor and an unrelated instructor is denied', async () => {
+    const session = await createRawSession({ startsAt: futureDate(24), capacity: 5 });
+    const member = await createMember();
+    const staffCookie = await loginAs(fixture.staff);
+    const booking = await bookViaApi(staffCookie, session.id, member.id);
+
+    const ownerCookie = await loginAs(fixture.instructorA);
+    const ownerRes = await server.request({
+      method: 'GET',
+      path: `/api/bookings/${booking.id}`,
+      cookie: ownerCookie,
+    });
+    assert.equal(ownerRes.status, 200, ownerRes.raw);
+
+    const unrelatedInstructor = await db('users')
+      .where({ role: 'instructor', is_active: true })
+      .whereNot({ id: fixture.instructorA.id })
+      .first();
+    const unrelatedCookie = await loginAs(unrelatedInstructor);
+    const unrelatedRes = await server.request({
+      method: 'GET',
+      path: `/api/bookings/${booking.id}`,
+      cookie: unrelatedCookie,
+    });
+    assert.equal(unrelatedRes.status, 403);
+  });
+
+  it('404s for an unknown booking id', async () => {
+    const cookie = await loginAs(fixture.staff);
+    const res = await server.request({
+      method: 'GET',
+      path: '/api/bookings/999999999',
+      cookie,
+    });
+    assert.equal(res.status, 404);
+  });
+
+  it('cannot be bypassed by putting an authorized session id in the request body', async () => {
+    const unrelatedSession = await createRawSession({ startsAt: futureDate(24), capacity: 5 });
+    const member = await createMember();
+    const staffCookie = await loginAs(fixture.staff);
+    const booking = await bookViaApi(staffCookie, unrelatedSession.id, member.id);
+
+    const unrelatedInstructor = await db('users')
+      .where({ role: 'instructor', is_active: true })
+      .whereNot({ id: fixture.instructorA.id })
+      .first();
+    const cookie = await loginAs(unrelatedInstructor);
+    const ownSession = await createRawSession({
+      startsAt: futureDate(24),
+      capacity: 5,
+    });
+    await db('sessions').where({ id: ownSession.id }).update({ primary_instructor_id: unrelatedInstructor.id });
+
+    const res = await server.request({
+      method: 'GET',
+      path: `/api/bookings/${booking.id}`,
+      cookie,
+      body: { sessionId: String(ownSession.id) },
+    });
+    assert.equal(res.status, 403);
+  });
+});
