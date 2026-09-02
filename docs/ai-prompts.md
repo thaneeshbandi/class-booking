@@ -5,8 +5,9 @@ than papered over: goals 1–5 (authentication, classes, sessions, co-instructor
 foundation) were built in an earlier session whose actual prompts were not recorded anywhere this
 document can honestly draw from — `git log -- docs/ai-prompts.md` shows this file was never touched
 before the session that built goal 4. Inventing that history now would violate the one rule this file
-has to follow, so it isn't attempted. What follows is complete and accurate for the two sessions that
-built goal 4 and goal 6, each the one this document's respective author actually has a record of.
+has to follow, so it isn't attempted. What follows is complete and accurate for the six sessions that
+built goals 4, 6, 7, 8, and 10, and the final pre-frontend audit, each the one this document's
+respective author actually has a record of.
 
 ## Implementing the booking lifecycle (goal 4)
 
@@ -353,3 +354,72 @@ stable member id — so the simpler, more direct fix was presence/absence checks
 freshly-created member id, not delta arithmetic. Caught before writing any tests by re-reading the
 dashboard's own test file for the pattern rather than reusing it blind, so nothing here needed a second
 pass.
+
+## Final pre-frontend audit
+
+### Prompt
+
+One long, specific instruction given at the start of this session, explicitly framed as an audit, not
+a feature milestone. In substance: before building any frontend code, read `README.md`, `CLAUDE.md`,
+every `docs/*.md` file, `SUBMISSION.md`, all backend source, migrations, seed, and tests, and inspect
+`git status`/`git log --oneline --decorate --graph`/the complete diff from the initial commit to HEAD;
+confirm the ten mandatory goals actually exist in code and that `SUBMISSION.md` matches reality;
+inspect every documentation file specifically for duplicated paragraphs/table rows, stale "not
+implemented" statements, contradictions between documents, incorrect goal numbering, stale API
+descriptions, incorrect commit references, fabricated history, and broken Markdown — without rewriting
+prose merely for style; build a concise goal-by-goal checklist (route, implementation file, DB
+structures, tests) without modifying code just to make it look better; audit every route for
+authentication, server-side role enforcement, resource-level authorization, IDOR resistance,
+collection-level scoping, client-role-spoof rejection, and deactivated-user behavior, reporting any
+real vulnerability but not fixing hypothetical ones; confirm the booking state machine and its
+invariants without redesigning them; confirm every civil-day/week feature consistently uses
+`STUDIO_TIMEZONE` and never `CURRENT_DATE`/server-local time; audit for N+1 queries, client-side
+aggregation, incorrect joins, missing authorization predicates, unnecessary extensions/indexes, and
+stale/unused indexes, without prematurely optimizing; run the full verification sequence (targeted
+tests, full suite twice, lint, a fresh `db:reset`, the suite again, real-server smoke tests covering the
+major mandatory features); only fix a failing test if it's a genuine defect or a genuine determinism
+problem, never just to make a failure disappear; correct documentation only after the audit itself was
+complete, without fabricating additional decisions or events; and close with an explicit prohibition on
+building the frontend, adding features, adding stretch goals, redesigning the backend, or refactoring
+working code merely for style, plus one small documentation-only commit if — and only if — corrections
+were actually required.
+
+### What was produced
+
+Three genuine documentation-staleness fixes: `docs/schema.md`'s `member_alert_dismissals` heading
+("goal 10, not yet consumed by an endpoint" → now describes the two endpoints that consume it);
+`docs/ai-prompts.md`'s own intro paragraph (claimed to cover two sessions when it already covered five,
+now six); and `backend/src/app.js`'s top comment (claimed goal 10 was unimplemented, never updated
+because that milestone needed no change to `app.js`). A programmatic sweep for duplicate headers,
+markdown table column-count consistency, and every commit hash cited in `docs/*.md` against
+`git cat-file` found nothing else wrong. A security/timezone/state-machine/SQL review (detailed in
+`docs/plan.md`'s account of this session) found no vulnerability, no timezone bug, no state-machine
+drift, and no accidental N+1 — every route's authorization chain was extracted and checked directly
+against its handler, not against what a comment claimed. One real backend gap was found: goal 1's
+"add members and set their membership expiry" had never been built as an API — no `POST`/`PATCH
+/api/members*`, ever, in any commit. Asked directly whether to fix it or only document it, given this
+audit's own explicit "no new features" restriction made the answer genuinely ambiguous rather than
+obvious (see `docs/decisions.md`, Decision 21) — the answer was to fix it. `POST /api/members` and
+`PATCH /api/members/:id` were added (staff-only, following `routes/classes.js`'s existing
+create/update-schema shape exactly), along with `tests/members.test.js` (19 tests).
+
+### What was correct
+
+The documentation-scanning methodology — grep/programmatic checks rather than re-reading prose from
+memory — caught real issues a memory-based pass could easily have missed (the `app.js` comment
+specifically, since it lives in source code, not a `docs/*.md` file, and nothing prompted re-reading it
+during the goal-10 session since that session never had a reason to open it). The security/state
+-machine audit's evidence-based approach (checking `git diff` against the actual booking-domain files
+rather than trusting `docs/decisions.md`'s own claim that they were untouched) confirmed the claim was
+true rather than merely repeating it. `tests/members.test.js` passed in full on its first run, and the
+full verification sequence — run twice before this fix and again in full afterward — stayed clean
+throughout.
+
+### What was wrong, and what was corrected
+
+The one real finding — the missing member create/edit endpoints — is documented above and in
+`docs/plan.md`/`docs/decisions.md` rather than repeated a third time here. No test failure, application
+bug, or incorrect implementation was produced and then fixed during this session; the "wrong" thing
+this session surfaced was a pre-existing gap in the codebase, not an error made during the session
+itself, which is why it's recorded under "what was produced" rather than as a caught-and-corrected
+mistake in the usual sense this section otherwise documents.

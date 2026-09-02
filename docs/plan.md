@@ -13,7 +13,8 @@ happened, not a retrofit.
 | 4 | 2026-09-02, later still | Goal 6 — replaced the minimal, unfiltered `GET /api/bookings` with the full server-side search/filter/sort/pagination/count endpoint, its authorization regression suite, and this documentation update. |
 | 5 | 2026-09-02, later still | Goal 7 — recurring session generation (`POST /api/sessions/recurring`) and attendance CSV export (`GET /api/sessions/:sessionId/attendance.csv`), their test suites, and this documentation update. |
 | 6 | 2026-09-02, later still | Goal 8 — the staff-only dashboard (`GET /api/dashboard`), its test suite, a pre-existing test-suite flakiness found and fixed along the way, and this documentation update. |
-| 7 (this one) | 2026-09-02, later still | Goal 10 — expiring membership alerts (`GET /api/members/alerts/expiring`, `POST /api/members/:memberId/alerts/membership-expiry/dismiss`), its test suite, and this documentation update. |
+| 7 | 2026-09-02, later still | Goal 10 — expiring membership alerts (`GET /api/members/alerts/expiring`, `POST /api/members/:memberId/alerts/membership-expiry/dismiss`), its test suite, and this documentation update. |
+| 8 (this one) | 2026-09-02, later still | Final pre-frontend audit — documentation consistency, security/timezone/state-machine/SQL review, and (found during the audit) implementing the missing goal-1 member create/edit endpoints. |
 
 Session 2's five foundation commits share one timestamp to the minute in `git log`, which is a real
 gap in this record: they clearly did not all land in the same sixty seconds, and no finer-grained
@@ -244,6 +245,53 @@ smoke-tested over real HTTP — listing alerts as staff, dismissing one, confirm
 directly changing that member's expiry date and confirming the alert returned, and a 403/401 for an
 instructor and an unauthenticated request on both endpoints — before this file was updated.
 
+## Session 8 — final pre-frontend audit
+
+Read in order before changing anything: `README.md`, `CLAUDE.md`, every `docs/*.md` file,
+`SUBMISSION.md`, the entire backend source, migrations, seed, and test suite, `git status`, and
+`git log --oneline --decorate --graph` from the very first commit. Scope was explicitly audit-and
+-cleanup only — no frontend, no new features, no style refactors, no database changes absent a real
+correctness defect.
+
+Documentation was checked systematically rather than by re-reading prose and trusting memory: every
+markdown table's column count was verified programmatically, every commit hash cited in `docs/*.md`
+was checked against `git cat-file`, every doc's headers were checked for exact duplicates, and every
+file was grepped for "not yet"/"not started"/"not implemented" phrasing to separate genuinely stale
+claims from accurate historical record (a past prompt transcript correctly saying "goal 10 was not
+started" *at the time that prompt was given* is not stale — it's history). Three real staleness issues
+turned up this way: `docs/schema.md`'s `member_alert_dismissals` heading still read "not yet consumed
+by an endpoint" after goal 10 shipped two endpoints that consume it; `docs/ai-prompts.md`'s intro
+paragraph still claimed to cover "the two sessions that built goal 4 and goal 6" when the file had grown
+to cover five; and `backend/src/app.js`'s own top comment still said "membership alerts (goal 10) are
+not implemented yet" — never updated because goal 10 needed no new top-level route mount, so `app.js`
+was never touched during that milestone. All three were corrected.
+
+The security/timezone/state-machine/SQL review was evidence-based rather than a re-read of prior
+documentation's own claims: every route's authorization middleware chain was extracted with `grep` and
+checked against the actual handler body (not against what a comment said it did); `git diff` confirmed
+the booking state-machine files (`bookingTransitions.js`, `bookingTiming.js`, `bookingTransaction.js`)
+have been byte-for-byte unchanged since the goal-4 hardening commit, meaning no later goal quietly
+touched the invariants goal 9 depends on; a repo-wide grep confirmed no `CURRENT_DATE`/
+`CURRENT_TIMESTAMP` anywhere and that every `Date.now()` in application code is confined to JWT
+issuance/expiry (a real-world wall-clock concern, not a studio-civil-day one); and every `Promise.all`
+and sequential-`for`-loop-around-a-query in the codebase was individually inspected and confirmed to be
+either running against the connection pool (safe) or a small, already-documented, bounded sequential
+pattern (session-conflict checks, waitlist promotion, recurring-candidate processing) rather than an
+accidental N+1.
+
+One real finding came out of this: `POST /api/members` and `PATCH /api/members/:id` — goal 1's own
+"add members and set their membership expiry" — had never been built. `routes/members.js` had said so
+itself, in a comment present since the file's very first version, and nothing built after goal 1 ever
+needed to write a member (every later feature only reads `members`), so the gap never surfaced as a
+failing test. Whether completing an already-mandatory, already-claimed-"Done" goal counts as the "new
+features" this audit's own instructions forbid, or as a defect an audit is supposed to catch, was
+asked rather than guessed at (see Decision 21) — the answer was to fix it, immediately, following
+`routes/classes.js`'s existing create/update-schema shape exactly. `tests/members.test.js` (19 tests)
+was written to the same standard as every other resource's test file and passed on its first complete
+run; the full verification sequence (targeted tests, full suite twice, lint, a fresh `db:reset`, the
+suite again, a real-server smoke test covering all ten goals plus the new endpoints) was then re-run in
+full, since the audit was no longer purely read-only.
+
 ## What was cut
 
 Nothing was cut from goal 4's own scope — all eight specified phases, including the full required
@@ -258,6 +306,8 @@ boundary/authorization/determinism tests the brief's own test-category list aske
 from goal 10's scope either — the full alert predicate (window boundaries, expiry-today validity),
 dismissal (idempotency, the not-in-window rejection, the reappear/re-suppress lifecycle across an
 expiry change), and the full authorization/IDOR battery the brief's own twenty-item test list asked for
-all landed. All ten mandatory goals are now done and tested. At the project level, only the frontend
-and the optional stretch ideas remain, per the brief's own stated priority — stretch ideas are never
-started before all ten mandatory goals are complete, and none of them have been touched.
+all landed. Goal 1's member create/edit gap, present since the earliest session this record can see,
+was found and closed during the final audit rather than left undocumented. All ten mandatory goals are
+now genuinely done and tested. At the project level, only the frontend and the optional stretch ideas
+remain, per the brief's own stated priority — stretch ideas are never started before all ten mandatory
+goals are complete, and none of them have been touched.

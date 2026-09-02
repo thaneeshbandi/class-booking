@@ -145,14 +145,17 @@ those verbs to begin with. Neither layer stops the table owner or a superuser �
 constraint that binds its own owner — which is the honest limit of what "cannot be edited or deleted
 through the application" can mean.
 
-### `member_alert_dismissals` — goal 10, not yet consumed by an endpoint
+### `member_alert_dismissals` — the append-free dismissal table behind goal 10
 
 `id`, `member_id` (FK → members, `CASCADE` — the only cascading delete in the schema, and correct: a
 dismissal is meaningless without its member), `dismissed_expiry_date`, `dismissed_by_user_id`,
 `dismissed_at`. `UNIQUE (member_id, dismissed_expiry_date)` records a dismissal against one *specific*
 expiry date rather than as a boolean flag on the member — so if staff later set a new, later expiry
 date that itself falls back within the seven-day window, the alert reappears automatically: the
-anti-join against this table simply stops matching, with no reset logic anywhere.
+anti-join against this table simply stops matching, with no reset logic anywhere. Read by
+`GET /api/members/alerts/expiring` and written by
+`POST /api/members/:memberId/alerts/membership-expiry/dismiss` (`domain/membershipAlerts.js`,
+`routes/members.js`) — see `docs/architecture.md`'s goal 10 section.
 
 ## Relationships
 

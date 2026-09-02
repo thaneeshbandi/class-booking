@@ -1,4 +1,5 @@
 import { Router } from 'express';
+import { z } from 'zod';
 
 import { daysUntilExpiry, isMembershipExpired, isWithinAlertWindow } from '../domain/membership.js';
 import {
@@ -10,15 +11,18 @@ import { db } from '../db/knex.js';
 import { authenticate } from '../middleware/authenticate.js';
 import { requireRole } from '../middleware/authorize.js';
 import { idParamSchema } from '../validation/ids.js';
+import { zodErrorResponse } from '../validation/respond.js';
 
 /**
- * Staff-only, read-only member data. Instructor access to members is not
- * part of the README brief — an instructor's data access is scoped to
- * sessions they are authorized to see, not to the studio's whole membership
- * list — so this is denied by default rather than granted absent a stated
- * reason to allow it. Creating and editing members is goal 1's staff
- * description but not implemented here; this exists to exercise staff-only
- * authorization.
+ * Staff-only member data. Instructor access to members is not part of the
+ * README brief — an instructor's data access is scoped to sessions they are
+ * authorized to see, not to the studio's whole membership list — so this is
+ * denied by default rather than granted absent a stated reason to allow it.
+ *
+ * Goal 1 — "studio staff ... add members and set their membership expiry" —
+ * is `POST /` (create) and `PATCH /:id` (edit, including moving the expiry
+ * date), following the same create/update-schema and validation shape
+ * `routes/classes.js` already uses.
  *
  * Goal 10 — membership expiry alerts — also lives in this file:
  * `GET /alerts/expiring` (the current alert population) and
@@ -28,6 +32,20 @@ import { idParamSchema } from '../validation/ids.js';
  */
 
 const router = Router();
+
+const memberCreateSchema = z.object({
+  fullName: z.string().trim().min(1, 'fullName is required'),
+  email: z.string().trim().toLowerCase().min(1).email('email must be a valid email address.'),
+  membershipExpiresOn: z
+    .string()
+    .regex(/^\d{4}-\d{2}-\d{2}$/, 'membershipExpiresOn must be YYYY-MM-DD.'),
+});
+
+const memberUpdateSchema = memberCreateSchema
+  .partial()
+  .refine((data) => Object.keys(data).length > 0, {
+    message: 'At least one field must be provided.',
+  });
 
 function serializeMember(row) {
   return {
@@ -66,6 +84,53 @@ router.get('/', authenticate, requireRole('staff'), async (_req, res, next) => {
   try {
     const members = await db('members').select('*').orderBy('full_name', 'asc');
     res.json({ members: members.map(serializeMember) });
+  } catch (error) {
+    next(error);
+  }
+});
+
+router.post('/', authenticate, requireRole('staff'), async (req, res, next) => {
+  try {
+    const parsed = memberCreateSchema.safeParse(req.body);
+    if (!parsed.success) {
+      return res.status(400).json(zodErrorResponse(parsed.error));
+    }
+
+    const [row] = await db('members')
+      .insert({
+        full_name: parsed.data.fullName,
+        email: parsed.data.email,
+        membership_expires_on: parsed.data.membershipExpiresOn,
+      })
+      .returning('*');
+    res.status(201).json({ member: serializeMember(row) });
+  } catch (error) {
+    next(error);
+  }
+});
+
+router.patch('/:id', authenticate, requireRole('staff'), async (req, res, next) => {
+  try {
+    const idResult = idParamSchema.safeParse(req.params.id);
+    if (!idResult.success) {
+      return res.status(400).json({ error: 'Invalid member id.' });
+    }
+
+    const parsed = memberUpdateSchema.safeParse(req.body);
+    if (!parsed.success) {
+      return res.status(400).json(zodErrorResponse(parsed.error));
+    }
+
+    const patch = { updated_at: db.fn.now() };
+    if (parsed.data.fullName !== undefined) patch.full_name = parsed.data.fullName;
+    if (parsed.data.email !== undefined) patch.email = parsed.data.email;
+    if (parsed.data.membershipExpiresOn !== undefined) {
+      patch.membership_expires_on = parsed.data.membershipExpiresOn;
+    }
+
+    const [row] = await db('members').where({ id: idResult.data }).update(patch).returning('*');
+    if (!row) return res.status(404).json({ error: 'Member not found.' });
+    res.json({ member: serializeMember(row) });
   } catch (error) {
     next(error);
   }

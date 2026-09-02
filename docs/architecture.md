@@ -99,6 +99,27 @@ Every other booking mutation (create, settle) and the two session-update fixes (
 /api/sessions/:id`) follow the identical shape: lock the session first, re-read state from that lock,
 decide, write, promote if applicable, commit.
 
+## Goal 1 — member create/edit (found and fixed during the final audit)
+
+Goal 1's own wording gives studio staff four creation/editing capabilities in one sentence — classes,
+sessions, **members**, and bookings. Classes and sessions were built early; `routes/members.js` was
+built staff-only and *read*-only from the start, with its own comment candidly stating the gap:
+"Creating and editing members is goal 1's staff description but not implemented here." That comment
+survived unchanged through every later goal, because nothing after goal 1 happened to need to create
+or edit a member — every later feature (bookings, the dashboard, membership alerts) only ever *read*
+`members`, so the missing write path never surfaced as a failing test or a blocked feature. The final
+pre-frontend audit is what caught it, cross-checking the README's literal goal-1 text against the
+actual route list rather than against what later goals had already exercised.
+
+`POST /api/members` (create) and `PATCH /api/members/:id` (edit, including moving the membership
+expiry date — the specific capability goal 10's alert window depends on) were added, staff-only,
+following the identical create/update-schema shape `routes/classes.js` already established: a full
+body schema for create, `.partial().refine(...)` for update (at least one field required),
+Zod-validated, with the create schema's `email` field trimmed and lower-cased the same way
+`routes/auth.js`'s login schema already does (`members.email` has no uniqueness constraint — see
+`docs/schema.md` — so this is purely storage hygiene, not a duplicate-prevention measure). No new
+database migration was needed; the `members` table already had every column this needed.
+
 ## Goal 6 — `GET /api/bookings` search, filter, sort, pagination, total count
 
 The one collection endpoint in the whole API that takes a real query-parameter contract, because it's

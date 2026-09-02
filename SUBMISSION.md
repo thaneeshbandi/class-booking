@@ -34,7 +34,7 @@ Mark each honestly. Partial is fine — say what is partial.
 
 | # | Goal | Status | Notes |
 |---|------|--------|-------|
-| 1 | Accounts and roles | Done | Server-enforced staff/instructor split throughout; see `docs/architecture.md` |
+| 1 | Accounts and roles | Done | Server-enforced staff/instructor split throughout; staff-only `POST`/`PATCH /api/members` for adding members and setting membership expiry (added during the final audit — see `docs/architecture.md` and `docs/decisions.md`) |
 | 2 | Classes | Done | Create/edit/archive/restore |
 | 3 | Sessions inside classes | Done | Create/edit/delete with server-side room/instructor conflict detection |
 | 4 | Booking lifecycle | Done | Full state machine, session-lock concurrency protocol, FIFO waitlist promotion, immutable history; see `docs/decisions.md` and `docs/architecture.md` |

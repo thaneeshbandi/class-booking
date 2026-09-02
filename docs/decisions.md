@@ -285,3 +285,20 @@ backend/src/domain/sessionConflicts.js`), not invented for this file.
   needs the constraint as a backstop. `ON CONFLICT DO NOTHING` is atomic by construction and already
   had a unique index to target (the one `member_alert_dismissals` was built with from the start), so
   there was no reason to duplicate its job in application code.
+
+## Decision 21
+
+- **Chose:** During the final pre-frontend audit, on discovering that `POST /api/members` and
+  `PATCH /api/members/:id` had never been built (goal 1 literally asks for staff to "add members and
+  set their membership expiry"), implement them immediately as a correctness fix, rather than leaving
+  the gap for a later milestone or merely documenting it.
+- **Rejected:** Treating the audit as read-only and only recording the gap in `SUBMISSION.md`; or
+  quietly marking goal 1 "Done" with an undisclosed caveat.
+- **Why:** This audit's own instructions drew a firm line against adding new features, which made the
+  call genuinely ambiguous — is completing an already-mandatory, already-claimed-"Done" goal a "new
+  feature" or a bug fix? Asked directly rather than guessed at, since the two readings lead to visibly
+  different submissions and only the person accountable for the submission can weigh "audit stayed
+  strictly read-only" against "goal 1 is now actually, not just nominally, complete." The answer was to
+  fix it: a missing mandatory capability discovered while verifying mandatory capabilities is closer to
+  a defect than a feature request, and the fix was small, additive, and followed an existing pattern
+  (`routes/classes.js`'s create/update shape) exactly rather than inventing new design.
