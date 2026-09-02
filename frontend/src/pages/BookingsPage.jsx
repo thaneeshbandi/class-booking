@@ -133,7 +133,10 @@ export function BookingsPage() {
     const next = new URLSearchParams(searchParams);
     if (value) next.set(key, value);
     else next.delete(key);
-    next.delete('page'); // any filter/sort change restarts pagination
+    // A filter/sort change restarts pagination — but this function is also
+    // how Pagination's own onPageChange navigates *to* a page, so it must
+    // not strip the very key it was just asked to set.
+    if (key !== 'page') next.delete('page');
     setSearchParams(next);
   }
 

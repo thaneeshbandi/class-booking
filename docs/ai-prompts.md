@@ -5,9 +5,9 @@ than papered over: goals 1–5 (authentication, classes, sessions, co-instructor
 foundation) were built in an earlier session whose actual prompts were not recorded anywhere this
 document can honestly draw from — `git log -- docs/ai-prompts.md` shows this file was never touched
 before the session that built goal 4. Inventing that history now would violate the one rule this file
-has to follow, so it isn't attempted. What follows is complete and accurate for the seven sessions that
-built goals 4, 6, 7, 8, and 10, the final pre-frontend audit, and the frontend itself, each the one
-this document's respective author actually has a record of.
+has to follow, so it isn't attempted. What follows is complete and accurate for the eight sessions that
+built goals 4, 6, 7, 8, and 10, the final pre-frontend audit, the frontend itself, and its Playwright
+E2E verification, each the one this document's respective author actually has a record of.
 
 ## Implementing the booking lifecycle (goal 4)
 
@@ -497,3 +497,85 @@ here — a genuine backend bug and a smaller frontend-only one:
    turned into a silently-ignored no-op rather than a validation error — so the class dropdown looked
    editable during an edit while never actually doing anything. Fixed by disabling and labeling that
    field during edit, and by not sending it in the edit request body.
+
+## Automated browser E2E verification with Playwright
+
+### Prompt
+
+One long, highly specific instruction given at the start of this session, explicit that the previous
+session's browser-tool attempt had failed (no Claude-in-Chrome/browser automation was available then)
+and that this session had real Playwright available and must use it. In substance: do not replace
+browser testing with `curl`; do not claim browser testing succeeded unless Playwright actually launches
+a browser and performs the UI interactions; do not add product features, this is verification only;
+install Playwright with Chromium under `frontend/e2e/`, with a config targeting the real running
+frontend, and make the tests deterministic; start the real backend and frontend, no mocked responses;
+drive a full staff browser flow (login through dashboard, member CRUD, alerts appear/dismiss, class
+CRUD/archive/restore, session CRUD, co-instructor add/remove, recurring generation with both created and
+skipped results rendered, booking search/filter/sort/pagination/create/cancel, booking detail/history,
+attendance CSV download and content verification); drive an instructor flow proving both what the UI
+hides and what the backend actually rejects, including direct navigation to a staff-only URL; test
+unauthenticated-redirect/login/logout/no-client-side-token; capture console errors, page errors, and
+unexpected 4xx/5xx, failing the test on anything unexpected rather than merely printing it; verify the
+CSV download specifically through the real browser, not `curl`, since a previous real bug lived
+specifically in a browser-exposed CORS header; take basic responsive screenshots at a desktop and a
+narrower viewport, not pixel-perfect; run the suite at least twice, and if flaky, fix the real cause
+rather than adding sleeps; prefer role/label/text locators over brittle CSS selectors; after Playwright
+succeeds, run frontend lint, frontend build, the Playwright suite twice, the backend full suite, a fresh
+`db:reset`, and the backend full suite again; update `docs/plan.md`, `docs/ai-prompts.md`, and
+`SUBMISSION.md` honestly — record that Playwright was used, not Claude-in-Chrome; and close with a
+detailed list of what the final report must contain, including an explicit statement that testing was
+performed in a real browser, not simulated with `curl`.
+
+### What was produced
+
+`frontend/playwright.config.js`; `frontend/e2e/fixtures.js` (shared login/logout/diagnostic helpers,
+plus `uniqueLabel`/`randomFutureDayOffset` for run-to-run determinism); `auth.spec.js` (4 tests),
+`staff-flow.spec.js` (a 12-test `describe.serial` journey covering the full 36-step staff flow),
+`instructor-flow.spec.js` (an 8-test `describe.serial` authorization-boundary suite), and
+`responsive.spec.js` (6 tests at two viewports) — 32 Playwright tests in total, all passing, run twice
+consecutively and clean both times. One small, genuinely warranted accessibility addition to
+`components/Modal.jsx` (`role="dialog"`, `aria-modal`, `aria-labelledby`) made modal-internal locators
+unambiguous from same-text page-level buttons — a markup fix to an existing component, not a new
+product feature.
+
+### What was correct
+
+The `attachDiagnostics()`/`assertClean()` pattern — fail on any unexpected console error, page error, or
+4xx/5xx, while precisely allowlisting only the responses a test deliberately triggers (an intentional
+403 authorization check, the expected 401 from checking auth while unauthenticated) — worked exactly as
+designed and caught every real defect described below directly, with no need for after-the-fact code
+review to find any of them.
+
+### What was wrong, and what was corrected
+
+Several things were wrong on the first (and second, and third) attempt, caught only by actually running
+a real browser against the real application repeatedly — full detail, including the two genuine
+application bugs this uncovered (a broken pagination "Next" button, a responsive layout that let a wide
+table drag the whole page into horizontal scroll), is in `docs/plan.md`'s account of this session and
+`docs/decisions.md`'s Decision 25, not repeated in full here. The single most instructive one for this
+document's specific purpose — a Claude-produced result that was concretely wrong, then corrected — is
+the `login()` test helper's own success check:
+
+**What was requested implicitly** (by every spec file's own need to know "did login finish"): a reliable
+way to tell that a login had actually completed, so the next step wouldn't run against a browser still
+sitting on `/login`.
+
+**What Claude produced first:** `fixtures.js#login()` filled the form, clicked submit, and then waited
+for the text "Class Booking" to become visible, reasoning — stated in the code's own comment at the time
+— that this text is the sidebar brand shown only in the authenticated app shell.
+
+**What was wrong:** `LoginPage.jsx` itself renders `<h1>Class Booking</h1>` as its own page title. The
+wait condition was satisfied instantly, before the login request had even been sent, on every single
+call — a false positive baked into the very first version of the helper. Every test written against it
+still passed regardless, purely by luck: each one's next assertion (a `toHaveURL(...)` check) has its
+own several-second polling window that happened to absorb the real login latency invisibly. The bug
+stayed hidden until a `test.beforeAll` hook with no such assertion immediately after `login()` (setting
+up two fixture sessions for `instructor-flow.spec.js`) hit the unguarded race directly, hung for the
+full 30-second hook timeout, and reported the actual state at failure: still on `/login`.
+
+**What was changed:** `login()` now waits for `page.waitForURL((url) => !url.pathname.startsWith('/login'))`
+instead — a check tied to the one thing that's actually true only after a real navigation away from the
+login page, regardless of what text either page happens to render. (A `.sidebar-brand`-specific element
+locator was tried as an intermediate fix and rejected: that element is `display: none` on the mobile
+viewport `responsive.spec.js` also logs in under, which would have made the fix correct on desktop and
+newly broken on mobile.)

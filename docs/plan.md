@@ -15,7 +15,8 @@ happened, not a retrofit.
 | 6 | 2026-09-02, later still | Goal 8 — the staff-only dashboard (`GET /api/dashboard`), its test suite, a pre-existing test-suite flakiness found and fixed along the way, and this documentation update. |
 | 7 | 2026-09-02, later still | Goal 10 — expiring membership alerts (`GET /api/members/alerts/expiring`, `POST /api/members/:memberId/alerts/membership-expiry/dismiss`), its test suite, and this documentation update. |
 | 8 | 2026-09-02, later still | Final pre-frontend audit — documentation consistency, security/timezone/state-machine/SQL review, and (found during the audit) implementing the missing goal-1 member create/edit endpoints. |
-| 9 (this one) | 2026-09-02, later still | The frontend — a React/Vite app covering every mandatory-goal workflow, two small backend additions it genuinely needed (CORS, room/instructor listing), a real cross-origin CSV-download bug found and fixed, and this documentation update. |
+| 9 | 2026-09-02, later still | The frontend — a React/Vite app covering every mandatory-goal workflow, two small backend additions it genuinely needed (CORS, room/instructor listing), a real cross-origin CSV-download bug found and fixed, and this documentation update. |
+| 10 (this one) | 2026-09-02, later still | Automated browser E2E verification with Playwright — real Chromium driving the actual running frontend and backend; one genuine responsive-layout bug and one genuine pagination bug found and fixed along the way; this documentation update. |
 
 Session 2's five foundation commits share one timestamp to the minute in `git log`, which is a real
 gap in this record: they clearly did not all land in the same sixty seconds, and no finer-grained
@@ -347,6 +348,100 @@ the frontend at every stage they were run; the backend's full test suite (`npm t
 → booking create → settle/cancel → attendance CSV → instructor-restricted-access checks) run against
 the real backend before any documentation was touched.
 
+## Session 10 — automated browser E2E verification with Playwright
+
+Read in order before writing any code: `README.md`, `CLAUDE.md`, `SUBMISSION.md`, every `docs/*.md`
+file, `frontend/package.json`, and every frontend page component — specifically to collect exact
+button/label/heading text before writing a single locator, rather than guessing and discovering
+mismatches only at test-run time. The milestone's own instruction was explicit and non-negotiable: use
+real Playwright browser automation, not `curl`, and disclose plainly if browser automation was ever
+unavailable (it was available this session — no such disclosure is needed here, unlike goal 9's own
+frontend session).
+
+Implementation order: `frontend/playwright.config.js` and `frontend/e2e/fixtures.js` (shared
+login/logout/diagnostics/unique-fixture helpers) were written first, since every spec file depends on
+them; `auth.spec.js` came next as the smallest possible real test, specifically to prove actual browser
+automation was working end to end (a real Chromium instance navigating, filling forms, clicking, reading
+localStorage/cookies) before writing anything larger. `staff-flow.spec.js` (the full 36-step staff
+journey), `instructor-flow.spec.js` (the 9-point authorization-boundary suite), and `responsive.spec.js`
+were written last, once the page-text reconnaissance and the diagnostic-assertion pattern were both
+already proven correct by the smaller suite.
+
+### What was correct
+
+The overall architecture — one `test.describe.serial` block per journey sharing a single real browser
+page, `webServer` auto-starting both the real backend and the real Vite dev server, `workers: 1` so every
+test runs against one live, shared Postgres database one at a time — worked as designed from the first
+run. The `attachDiagnostics()` pattern (fail the test on any unexpected console error, page error, or
+4xx/5xx response, while precisely allowlisting only the responses/console noise a test deliberately
+triggers) caught every regression described below; nothing was found by inspection afterward that this
+mechanism hadn't already failed a test on directly.
+
+### What was wrong, and what was corrected
+
+Running the suite repeatedly (required by this milestone, and standard practice for this project by now)
+surfaced two real defects in the application itself, plus several test-only bugs — all caught by
+Playwright actually driving a real browser, not by `curl`, which is exactly the class of gap this
+milestone existed to close:
+
+1. **A real, previously-undetected pagination bug.** `BookingsPage.jsx`'s `updateParam(key, value)`
+   unconditionally ran `next.delete('page')` after setting whichever param it was called with — including
+   when the key being set *was* `'page'` itself, since `Pagination`'s own `onPageChange` calls
+   `updateParam('page', String(next))`. The "Next" button therefore set `page=2` in the URL and then
+   immediately deleted it again in the same function call, so pagination silently did nothing at all —
+   clicking "Next" left the list on page 1 forever. Every prior verification pass (backend tests, `curl`
+   simulation) tested `GET /api/bookings?page=2` directly and never exercised the frontend's own click
+   -to-navigate path, which is exactly why this had never been caught before. Fixed by only deleting
+   `page` when the key being changed is *not* `page` itself (`frontend/src/pages/BookingsPage.jsx`),
+   preserving the intended "any filter/sort change restarts pagination" behavior for every other key.
+2. **A real, previously-undetected responsive layout bug.** No page wraps its `<table className="table">`
+   in a scrollable container, and `.app-content` had no `overflow-x` rule of its own — on a narrow
+   viewport, a wide table (e.g. the members table) forced the *entire page* to scroll horizontally,
+   dragging the sidebar/nav out of view with it, rather than only the table itself scrolling. Caught by
+   `responsive.spec.js` measuring `document.documentElement.scrollWidth` against `clientWidth` at a
+   375px-wide viewport (169px of unwanted overflow) — a check `curl` has no way to perform at all, since
+   it has no layout engine. Fixed with one added CSS property, `overflow-x: auto` on `.app-content`
+   (`frontend/src/styles.css`), which contains the scroll to the content area rather than changing any
+   page's markup.
+3. **A false-positive login-success check in the test helpers themselves**, not an application bug:
+   `fixtures.js#login()` originally waited for the text "Class Booking" to become visible as proof the
+   authenticated app shell had rendered — but `LoginPage.jsx` itself also renders `<h1>Class Booking</h1>`
+   as its own heading, so that wait condition was satisfied instantly, before the login request had even
+   resolved, on every single call. Every test using `login()` happened to still pass, because each one's
+   very next assertion (`toHaveURL(...)`) has its own several-second retry window that absorbed the real
+   login latency invisibly — until a `test.beforeAll` hook with no such assertion in between (setting up
+   fixture sessions for `instructor-flow.spec.js`) hit the race directly and hung for the full 30-second
+   hook timeout, having navigated back to `/login` mid-fixture-setup. Fixed by waiting for the URL to
+   actually leave `/login` instead of for any specific visible text.
+4. **A locator-ambiguity bug in the tests, twice**, both from Playwright's default substring/case
+   -insensitive text matching: `getByLabel('Class')` inside the session-create form also matched the
+   Duration and Capacity fields, whose labels read "...defaults from class" — fixed by adding
+   `exact: true`. Separately, `selectOption({ label: <RegExp> })` doesn't accept a pattern at all (only
+   `getByLabel` does) — fixed by constructing the exact expected option string directly, since the test
+   already knew both halves of it (the member's own generated name and email).
+5. **A read-before-render race in one test**, not an application bug: reading `.pagination-summary`'s
+   `textContent()` immediately after clicking "Next" raced the async page-2 fetch/re-render — the URL had
+   already updated (that assertion passed) but the visible text hadn't yet. Fixed by asserting with
+   `expect(locator).toHaveText(...)`, which polls until it matches or genuinely times out, instead of
+   reading a one-shot snapshot.
+6. **The date-fixture self-collision bug described in Decision 25** — a fixed day offset for E2E session
+   fixtures colliding with the same suite's own previous run. Fixed exactly as that decision describes.
+
+None of the above six needed a second correction after being fixed; each was re-verified by re-running
+the specific failing test, then the full suite, before moving on.
+
+### Verification
+
+What was actually run, in order: `npm run lint` (clean) and `npm run build` (clean) on `frontend/`; the
+full Playwright suite (`npx playwright test`, 32 tests across `auth.spec.js`, `staff-flow.spec.js`,
+`instructor-flow.spec.js`, `responsive.spec.js`) — which surfaced the six issues above across several
+iterations — then two full, clean, consecutive runs (32/32 passing both times) once every fix landed,
+satisfying this milestone's own repeatability requirement; the backend's full suite
+(`npm test --test-concurrency=1`, 391 tests, 390 passing, 1 skipped — the same pre-existing
+`APP_DB_URL`-gated grants test every earlier session has also skipped); a fresh `npm run db:reset`; and
+the backend suite once more against the freshly reset database (identical result). No backend test
+regressed from any frontend-side change made this session.
+
 ## What was cut
 
 Nothing was cut from goal 4's own scope — all eight specified phases, including the full required
@@ -369,8 +464,10 @@ The frontend covers every required workflow the milestone listed — dashboard, 
 dismissal, class CRUD/archive/restore, session CRUD, co-instructor management, recurring generation
 with created/skipped rendered in full, booking search/filter/sort/pagination, booking create/cancel/
 settle, the immutable history timeline, and the attendance CSV download — nothing from that list was
-skipped. What was not attempted, deliberately, per the milestone's own restriction: live interactive
-browser testing (no Chrome extension was connected this session; verification instead leaned on
-`curl`-simulated requests and a careful reading of the actual browser CORS/fetch specification where
-`curl` alone could not tell the whole story — disclosed above, not hidden), and the stretch ideas, which
-remain untouched at the project level, same as every prior session.
+skipped. What was not attempted, deliberately, per that session's own restriction at the time: live
+interactive browser testing (no Chrome extension was connected in the session that built the frontend;
+verification there leaned on `curl`-simulated requests and a careful reading of the actual browser
+CORS/fetch specification where `curl` alone could not tell the whole story). That gap was closed in
+session 10 above with real Playwright browser automation, which is exactly what caught the two real
+application bugs (pagination, responsive layout) `curl` had no way to see. The stretch ideas remain
+untouched at the project level, same as every prior session.

@@ -16,11 +16,14 @@ export function Modal({ title, onClose, children, width }) {
     <div className="modal-overlay" onClick={onClose}>
       <div
         className="modal-panel"
+        role="dialog"
+        aria-modal="true"
+        aria-labelledby="modal-title"
         style={width ? { maxWidth: width } : undefined}
         onClick={(event) => event.stopPropagation()}
       >
         <div className="modal-header">
-          <h2>{title}</h2>
+          <h2 id="modal-title">{title}</h2>
           <button type="button" className="modal-close" onClick={onClose} aria-label="Close">
             ×
           </button>

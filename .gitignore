@@ -10,3 +10,8 @@ venv/
 .env.*.local
 *.log
 .DS_Store
+
+# Playwright
+frontend/test-results/
+frontend/playwright-report/
+frontend/blob-report/

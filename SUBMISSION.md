@@ -52,21 +52,27 @@ Stack table). None of the optional stretch ideas listed in `README.md` have been
 ## Verification
 
 What was actually run, most recently: backend `npm test --test-concurrency=1` — 391 tests, 390 passing,
-1 skipped (an `APP_DB_ROLE`-gated schema test, skipped whenever that optional role isn't configured,
-same as every earlier run) — run twice, then again after a fresh `npm run db:reset`; `npm run lint`
-clean on both `backend/` and `frontend/`; `npm run build` clean on `frontend/`. Full detail, including
-every session's exact commands and results, is in `docs/plan.md`.
+1 skipped (an `APP_DB_URL`-gated schema test, skipped whenever that optional role isn't configured, same
+as every earlier run) — run twice, then again after a fresh `npm run db:reset`; `npm run lint` clean on
+both `backend/` and `frontend/`; `npm run build` clean on `frontend/`. Full detail, including every
+session's exact commands and results, is in `docs/plan.md`.
 
-**A real, disclosed limitation:** end-to-end frontend verification was done by simulating the browser's
-exact request flow with `curl` (cookies, `Origin` header, identical request bodies to what the frontend
-code actually sends) against the real running backend, not by interactive browser testing — no browser
-automation tool was available in the sessions that built or audited the frontend. This did catch one
-real bug a `curl`-only check could not have (a cross-origin header-exposure issue affecting the
-attendance CSV's downloaded filename — see `docs/decisions.md`, Decision 23), found by reasoning through
-the browser CORS specification directly rather than by a tool observing the failure. What this
-verification approach has *not* done is drive an actual browser through the UI, so purely visual/layout
-issues or a bug that only manifests through real click-and-type interaction could still exist
-undiscovered.
+**End-to-end frontend verification was performed with real Playwright browser automation** — Chromium,
+via `@playwright/test`, actually launching a browser and driving the real running frontend against the
+real running backend and PostgreSQL database (no mocked responses, nothing simulated with `curl`). 32
+tests across `frontend/e2e/{auth,staff-flow,instructor-flow,responsive}.spec.js` cover the full staff
+journey (dashboard, member CRUD, alerts, class CRUD/archive/restore, session CRUD, co-instructor add/
+remove, recurring generation with both created and skipped results rendered, booking search/filter/
+sort/pagination, booking create/cancel, booking history, and the attendance CSV downloaded and read back
+through Playwright's own download API — not `curl`), an instructor-authorization-boundary suite (what
+the UI hides and, separately, what the backend itself rejects on a direct URL to a session the
+instructor has no relationship to), the full auth lifecycle (unauthenticated redirect, login, logout,
+no client-side token), and basic responsive sanity at two viewports. The suite ran twice consecutively,
+both times clean (32/32), satisfying the determinism requirement. Full detail — including the exact
+commands, and the two genuine application bugs this real-browser testing found and fixed that no earlier
+`curl`-based check had been able to see (a broken pagination "Next" button, and a responsive layout that
+let a wide table drag the whole page into horizontal scroll) — is in `docs/plan.md`'s Session 10 and
+`docs/ai-prompts.md`'s Playwright entry.
 
 ## How much time did you actually spend?
 

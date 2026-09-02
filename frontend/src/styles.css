@@ -151,6 +151,12 @@ a {
   padding: 24px;
   max-width: 1200px;
   width: 100%;
+  /* Tables render at their natural content width with no wrapper of their
+   * own — on a narrow viewport that's wider than the viewport itself.
+   * Scrolling it here, rather than letting the overflow reach
+   * `document.documentElement`, keeps the sidebar/nav fixed and only the
+   * content area scrolls sideways. */
+  overflow-x: auto;
 }
 
 @media (max-width: 800px) {

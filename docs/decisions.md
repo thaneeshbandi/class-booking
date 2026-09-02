@@ -348,3 +348,22 @@ backend/src/domain/sessionConflicts.js`), not invented for this file.
   scale. A plain "mutate, then refetch" is also simpler to verify correct — there is no cache-
   invalidation logic to get wrong, only a request-response pair each page already has to reason about
   for its initial load anyway.
+
+## Decision 25
+
+- **Chose:** Playwright E2E fixture scheduling (session start times, recurring-generation date ranges)
+  uses a day offset randomized fresh on every process start (`randomFutureDayOffset()` in
+  `frontend/e2e/fixtures.js`, a wide 700–5700-day-out window), the same way `uniqueLabel()` already
+  randomizes member/class names.
+- **Rejected:** A fixed day offset (e.g. always "30 days from now") for E2E session fixtures.
+- **Why:** The milestone that added this suite explicitly requires running it at least twice against
+  the same persistent database to prove determinism, and sessions are never deleted once they carry a
+  booking (by the same `ON DELETE RESTRICT` design goal 4 already relies on) — so a fixed offset's
+  second run schedules a new session at the exact same room/instructor/time as the first run's own
+  still-present fixture and gets a real 409 scheduling conflict, not a clean pass. This is the same
+  self-collision failure mode `docs/plan.md`'s account of goal 4, goal 7, and goal 8 each already
+  document and fixed the same way for the backend's own test suite (`sessions.test.js`'s `p6Base`); this
+  decision applies that already-proven fix to the new Playwright fixtures rather than rediscovering the
+  bug a fourth time from scratch. Caught by actually running the suite twice, per that same requirement
+  — the dialog stayed open (a 409 conflict response, not a validation error) after the second run's
+  session-create step, not a timeout or a crash, which is what made the cause traceable.
