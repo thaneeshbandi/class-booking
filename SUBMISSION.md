@@ -39,7 +39,7 @@ Mark each honestly. Partial is fine — say what is partial.
 | 3 | Sessions inside classes | Done | Create/edit/delete with server-side room/instructor conflict detection |
 | 4 | Booking lifecycle | Done | Full state machine, session-lock concurrency protocol, FIFO waitlist promotion, immutable history; see `docs/decisions.md` and `docs/architecture.md` |
 | 5 | Co-instructors | Done | Staff-only add/remove; instructor sees own-sessions list (primary + co-instructor) |
-| 6 | Booking search/filter/sort/pagination | Not done | Only a minimal unfiltered `GET /api/bookings` exists so far |
+| 6 | Booking search/filter/sort/pagination | Done | `GET /api/bookings` — text search (name/email), class/session/status filters, a whitelisted sort, page/pageSize pagination, and a total count, all in one authorized SQL query; see `docs/architecture.md` and `docs/decisions.md` |
 | 7 | Recurring schedule + CSV export | Not done | |
 | 8 | Dashboard | Not done | |
 | 9 | Immutable booking history | Done | Delivered as part of goal 4 — append-only `booking_events`, enforced by trigger and (optionally) revoked grants |

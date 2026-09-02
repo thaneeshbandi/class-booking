@@ -9,7 +9,8 @@ happened, not a retrofit.
 |---|---|---|
 | 1 | 2026-08-31 – 2026-09-01 | Repo scaffold, `README.md`/`SUBMISSION.md`/`CLAUDE.md` in place as stubs. No code yet. |
 | 2 | 2026-09-02, early | Backend scaffold (Express + validated env config); the full schema as migrations 001–010; an idempotent demo seed; a minimal server with a `/health` check; `tests/schema.test.js` verifying the schema live against Postgres. Then, in the same session: authentication/authorization (goal 1), classes and sessions with conflict detection (goals 2–3), co-instructor management (goal 5). |
-| 3 (this one) | 2026-09-02, later the same day | Goal 4 — the full booking lifecycle — in the eight phases below, plus the documentation you're reading now. |
+| 3 | 2026-09-02, later the same day | Goal 4 — the full booking lifecycle — in the eight phases described in that session's own account below, plus the documentation describing it. |
+| 4 (this one) | 2026-09-02, later still | Goal 6 — replaced the minimal, unfiltered `GET /api/bookings` with the full server-side search/filter/sort/pagination/count endpoint, its authorization regression suite, and this documentation update. |
 
 Session 2's five foundation commits share one timestamp to the minute in `git log`, which is a real
 gap in this record: they clearly did not all land in the same sixty seconds, and no finer-grained
@@ -68,10 +69,49 @@ timestamps for sessions that, being permanently undeletable once booked, collide
 leftover data from a previous run of the same file — caught by deliberately re-running the suite
 several times before committing, and fixed by randomizing those fixtures' base offsets per run.
 
+## Session 4 — goal 6
+
+Read in order before writing any code: `README.md`, `CLAUDE.md`, then all four `docs/*.md` files, then
+the entire existing backend source and test suite — specifically so the new endpoint would reuse
+`scopeSessionsToInstructor` rather than re-deriving instructor ownership, and so its response shape and
+validation-error conventions would match the rest of the API rather than inventing a fourth style.
+`routes/bookings.js`'s `GET /` was the only route touched; every mutation route (create/cancel/settle)
+and every other file's authorization logic was left exactly as goal 4 left it, per `CLAUDE.md`'s "do not
+redesign existing booking/session authorization or booking-state logic."
+
+Implementation order: the query architecture (one base query, cloned for count and page; see
+`docs/architecture.md`) was designed and written first, since every other piece — the sort whitelist,
+the pagination math, the response serializer — hangs off that shape. The existing collection-scoping
+test in `tests/authorization.test.js` was updated next, before writing any new tests, because it
+asserted the *old*, unpaginated contract (every authorized booking in one response) and would have kept
+"passing" for the wrong reason — silently checking only page 1 — if left unpaginated-aware. The new
+`tests/bookingSearch.test.js` suite was written and run last, phase by phase matching the brief's own
+listed categories: base visibility, the critical OR-condition regression, filter-level IDOR, text
+search, filters, sorting (including the deterministic-tiebreaker case), pagination, and total count.
+
+One test came back wrong on the first run and was fixed before landing (see `docs/ai-prompts.md` for the
+prompt/output/correction) — a status-filter IDOR test asserted every booking instructor A could see
+under `?status=booked` belonged to one specific fixture session, which was true in isolation but false
+once other describe blocks in the same file had already created instructor A other sessions (a
+co-instructor fixture, the sorting fixtures) earlier in the same run; the assertion was rewritten to
+check the thing actually under test — that instructor B's booking never appears — rather than an
+assumption about how many of instructor A's own sessions exist.
+
+No time estimate was written down before starting, for the same reason `CLAUDE.md` gives for goal 4:
+recording one now would be inventing a development story after the fact. What's true and checkable is
+the verification record itself — the full suite (`npm test --test-concurrency=1`) was run twice before
+any documentation was touched, `npm run lint` was run and its one failure (an unused variable in the new
+test file) fixed, the database was reset and reseeded from migrations 001–010 and the suite run twice
+more against the fresh copy, and the running server was smoke-tested over real HTTP — login, the default
+listing, a search, an out-of-range `pageSize`, an invalid `status`/`sort`, and an unauthenticated
+request — before this file was updated.
+
 ## What was cut
 
 Nothing was cut from goal 4's own scope — all eight specified phases, including the full required
-concurrency-test battery, landed. At the project level, goals 6–10 (booking search/filter/sort
-/pagination, recurring schedule generation and CSV export, the dashboard, and membership alerts) and
-the entire frontend have not been started, per the brief's own stated priority: finishing fewer goals
-solidly over starting every goal partially. They're next, in that order, matching the brief's numbering.
+concurrency-test battery, landed. Nothing was cut from goal 6's scope either — search, every filter,
+the sort whitelist with its deterministic tiebreaker, pagination, and the total count all landed, along
+with the full IDOR/security regression battery the brief asked for. At the project level, goals 7–10
+(recurring schedule generation and CSV export, the dashboard, and membership alerts) and the entire
+frontend have not been started, per the brief's own stated priority: finishing fewer goals solidly over
+starting every goal partially. They're next, in that order, matching the brief's numbering.

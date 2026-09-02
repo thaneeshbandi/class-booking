@@ -89,3 +89,28 @@ backend/src/domain/sessionConflicts.js`), not invented for this file.
   increase can silently promote several people the instant it lands; returning `promoted` inline is the
   same transparency the brief already requires of `POST /:bookingId/cancel`; a caller who doesn't care
   can just ignore the field.
+
+## Decision 7
+
+- **Chose:** `GET /api/bookings`'s count query and page query are both `.clone()`s of one base Knex
+  query object — the joins, the instructor scope, and every active filter built exactly once.
+- **Rejected:** Two independently written queries, one `COUNT(*)` and one `SELECT ... LIMIT/OFFSET`,
+  each re-expressing the same scope-and-filter predicate.
+- **Why:** Two hand-maintained copies of an authorization predicate are a maintenance trap, not just
+  extra typing — the day someone adds a new filter (or fixes a scoping bug) to one copy and forgets the
+  other, `total` silently stops meaning "how many rows match what the page actually enforces," and
+  nothing in the code would catch that drift. Cloning one query object makes the two structurally
+  identical by construction, so the failure mode is closed rather than merely documented against.
+
+## Decision 8
+
+- **Chose:** `GET /api/bookings` defaults to `sort=bookedAt&direction=desc` — the most recently created
+  booking first — when neither is supplied.
+- **Rejected:** Defaulting to ascending order, matching the insertion-order `ORDER BY created_at asc`
+  the goal-4-era placeholder endpoint used.
+- **Why:** The brief doesn't state a default, and the placeholder's ascending order was never a
+  deliberate choice — nothing (no frontend, no documented contract) depended on it, since goal 6 is the
+  first time this endpoint's ordering is part of a stated contract at all. Staff and instructors opening
+  a booking list are almost always checking on recent activity, not the studio's oldest booking, so
+  newest-first is the more defensible default for the actual use case the brief describes ("finding
+  bookings").

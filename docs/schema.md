@@ -104,7 +104,13 @@ foreign key has no such window because it takes a row lock on the referenced `se
 | created_at, updated_at | timestamptz | |
 
 No `booked_count` anywhere — occupancy is always counted live under the session lock (see
-`architecture.md`). `UNIQUE INDEX ... (session_id, member_id) WHERE status IN ('booked',
+`architecture.md`). Goal 6's search/filter/sort/pagination query (`GET /api/bookings`) was reviewed
+against this table's existing indexes and needed no new migration: `bookings_created_at` serves the
+default sort, `bookings_session_status` serves the session and status filters, and `bookings_member`
+serves the join to `members` the text search runs against — see `architecture.md`'s goal 6 section for
+the full review, including why plain `ILIKE` was kept over adding `pg_trgm`.
+
+`UNIQUE INDEX ... (session_id, member_id) WHERE status IN ('booked',
 'waitlisted')` is the database backstop for "at most one *active* claim per member per session" — a
 narrower predicate than `status <> 'cancelled'` on purpose, so it states exactly the *live-claim* rule
 and never smuggles in a separate "at most one non-cancelled booking ever" restriction that would block

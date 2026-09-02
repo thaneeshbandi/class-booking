@@ -1,9 +1,9 @@
 # Architecture
 
-This describes the system as it actually stands after goals 1–5: accounts and roles, classes,
-sessions, the booking lifecycle, and co-instructors. Goals 6–10 (search/filter/sort/pagination,
-recurring schedules and CSV export, the dashboard, and membership alerts) and the frontend are not
-built yet — see "What was deliberately not built" below.
+This describes the system as it actually stands after goals 1–6: accounts and roles, classes,
+sessions, the booking lifecycle, co-instructors, and server-side booking search/filter/sort
+/pagination. Goals 7–10 (recurring schedules and CSV export, the dashboard, and membership alerts)
+and the frontend are not built yet — see "What was deliberately not built" below.
 
 ## Moving pieces
 
@@ -98,14 +98,80 @@ Every other booking mutation (create, settle) and the two session-update fixes (
 /api/sessions/:id`) follow the identical shape: lock the session first, re-read state from that lock,
 decide, write, promote if applicable, commit.
 
+## Goal 6 — `GET /api/bookings` search, filter, sort, pagination, total count
+
+The one collection endpoint in the whole API that takes a real query-parameter contract, because it's
+the one place the brief explicitly forbids the JavaScript-side shortcut: "do not load every booking
+into the browser and filter there." Every operation below — search, filter, sort, pagination, count —
+runs as one query shape in PostgreSQL; none of it happens after the rows leave the database.
+
+**One base query, built once, cloned twice.** `routes/bookings.js`'s `GET /` builds a single Knex
+query — `bookings` joined to `sessions`, `members`, and `classes` — and applies, in order: the
+instructor scope (`scopeSessionsToInstructor`, the exact predicate `middleware/sessionAccess.js`
+already uses for the session/booking single-resource checks, imported rather than re-expressed), then
+`classId`, `sessionId`, and `status` as plain equality filters, then the text search. That query is
+never executed directly — `.clone()` produces a `count({count: 'bookings.id'})` query for the total and
+a second clone gets `.select(...)`, `.orderBy(...)`, `.limit()`, `.offset()` for the page, and the two
+run concurrently (`Promise.all`, against the pool — not a single locked connection, so this is safe
+unlike the transaction-internal sequential-query rule in `bookingTransaction.js`). Because both the
+count and the page descend from the same base query object, there is no way for the two to see a
+different set of authorized, filtered rows — the alternative (two independently hand-written
+`WHERE` clauses, one for counting and one for fetching) is exactly the kind of drift a `.clone()` is
+meant to make structurally impossible.
+
+**Every join here is on a single not-null foreign key** (`bookings.session_id → sessions.id`,
+`bookings.member_id → members.id`, `sessions.class_id → classes.id`), so a booking row can never fan
+out into more than one result row — no `DISTINCT` is needed anywhere in this query.
+
+**Authorization is AND, never OR.** The scope predicate and every filter are separate `.where(...)`
+calls, which Knex always ANDs together at the top level; the text search is the one place two
+conditions (name-match OR email-match) had to be combined, and that OR is grouped inside its own
+`query.where((qb) => qb.where(...).orWhere(...))` callback — rendered as one parenthesized clause ANDed
+onto everything else, so it can only ever narrow an instructor's already-scoped rows, never widen them
+into another instructor's. `q=<a member visible only in another instructor's session>` is exactly the
+regression `tests/bookingSearch.test.js` exists to pin down: the naive-but-wrong shape
+(`query.where(scope).orWhere('members.email', ...)`) would leak every studio member matching the term,
+scope or no scope, and there is a dedicated test asserting zero results for exactly that query.
+
+**The sort whitelist is a fixed object, not a client-controlled column name.** `sort` (one of
+`bookedAt`, `status`, `session`) is validated by a Zod enum before it ever reaches SQL, then looked up
+in `BOOKING_SORT_COLUMNS` to the actual `bookings.created_at` / `bookings.status` / `sessions.starts_at`
+expression — an unrecognized value 400s before any query is built, and no string the client sends is
+ever interpolated into an `ORDER BY`. Every ordering — including `direction=desc` — appends
+`bookings.id ASC` as a second `orderBy`, so two rows tied on the primary sort column (two bookings with
+equal `status`, say) still resolve to one deterministic total order and can never trade places between
+page 1 and page 2 of the same query.
+
+**Pagination is `LIMIT`/`OFFSET` computed from validated `page`/`pageSize`** (`offset = (page - 1) *
+pageSize`), with `pageSize` capped at 100 — a client cannot ask for an unbounded page. An empty result
+(no filter matched anything) and a page requested past the last one look the same in one respect and
+different in another: both return `bookings: []`, but `total`/`totalPages` stay whatever the filters
+actually matched — `totalPages: 0` only when `total` itself is `0`
+(`Math.ceil(total / pageSize)`, which is `0` exactly when `total` is `0`, and never otherwise).
+
+**Why plain `ILIKE '%term%'` and no `pg_trgm`.** The brief explicitly names this endpoint's scale as a
+single studio's bookings, not a search-engine workload; a leading-wildcard `ILIKE` cannot use a normal
+B-tree index and never will, but at this scale that's a sub-millisecond sequential scan against a
+handful of joined rows, not a bottleneck worth a Postgres extension, an index type, and the
+deployment-environment assumption ("the extension is installed") that comes with it. `docs/schema.md`
+already states plainly what happens first as the data grows; a trigram index would be the answer if
+that pressure point were ever actually reached, not a pre-emptive one.
+
+**Indexes reviewed, none added.** Every access path this query needs already existed before goal 6:
+`bookings_created_at (created_at, id)` for the default sort, `bookings_session_status (session_id,
+status)` for the session/status filters, `bookings_member (member_id)` for the join to `members`,
+`sessions_class_starts_at (class_id, starts_at)` for the class filter and the `session`-column sort,
+and `session_co_instructors_user (user_id, session_id)` for the scope predicate's `EXISTS` subquery.
+Nothing new was migrated in for this goal.
+
 ## What was deliberately not built, and why
 
 - **A frontend.** The brief scores ten server-enforced goals; every hour spent on a UI before the
   server-side rules were all correct and tested would have been an hour not spent proving the thing
-  the assignment is actually assessing. It comes after goal 5 lands cleanly.
-- **Goals 6–10** (search/filter/sort/pagination, recurring schedule generation, CSV export, the
-  dashboard, membership alerts) — not started. Per the brief's own priority order, they come after the
-  booking lifecycle (goal 4) and co-instructors (goal 5), both of which are now done and tested.
+  the assignment is actually assessing. It comes after goal 6 lands cleanly.
+- **Goals 7–10** (recurring schedule generation, CSV export, the dashboard, membership alerts) — not
+  started. Per the brief's own priority order, they come after booking search/filter/sort/pagination
+  (goal 6), now done and tested.
 - **A maintained `booked_count` column.** Occupancy is always counted from `bookings` under the
   session lock (`countOccupiedSeats`) rather than cached and incrementally updated. A counter is a
   second source of truth that can drift from the rows it's supposed to summarize the moment any code

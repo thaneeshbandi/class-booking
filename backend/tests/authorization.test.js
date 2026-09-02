@@ -322,6 +322,34 @@ describe('collection authorization: GET /api/sessions', () => {
   });
 });
 
+/** Goal 6 paginates `GET /api/bookings` (default pageSize 20), so a scoping
+ * check against the *complete* authorized set has to walk every page rather
+ * than assume it all arrives in one response — this repo's test fixtures are
+ * deliberately never cleaned up between runs (see `bookings.test.js`), so the
+ * total row count only grows over time and will exceed one page. `total`
+ * itself is asserted to equal `expected.size` as an extra check that
+ * pagination's own count isn't silently narrowed by the same scope bug this
+ * test exists to catch. */
+async function fetchAllBookingIds(cookie) {
+  const ids = new Set();
+  let page = 1;
+  let totalPages = 1;
+  let total = 0;
+  do {
+    const res = await server.request({
+      method: 'GET',
+      path: `/api/bookings?page=${page}&pageSize=100`,
+      cookie,
+    });
+    assert.equal(res.status, 200);
+    for (const booking of res.json.bookings) ids.add(String(booking.id));
+    totalPages = res.json.pagination.totalPages;
+    total = res.json.pagination.total;
+    page += 1;
+  } while (page <= totalPages);
+  return { ids, total };
+}
+
 describe('collection authorization: GET /api/bookings', () => {
   it('scopes results to exactly what each caller is authorized to see, computed in SQL', async () => {
     for (const user of [
@@ -331,16 +359,14 @@ describe('collection authorization: GET /api/bookings', () => {
       fixture.unrelatedInstructor,
     ]) {
       const cookie = await loginAs(user);
-      const res = await server.request({ method: 'GET', path: '/api/bookings', cookie });
-      assert.equal(res.status, 200);
-
-      const returnedIds = new Set(res.json.bookings.map((b) => String(b.id)));
+      const { ids: returnedIds, total } = await fetchAllBookingIds(cookie);
       const expected = await expectedBookingIds(user);
       assert.deepEqual(
         returnedIds,
         expected,
         `booking list for ${user.email} did not match the independently-computed expected set`,
       );
+      assert.equal(total, expected.size, `reported total for ${user.email} did not match the expected count`);
     }
   });
 });

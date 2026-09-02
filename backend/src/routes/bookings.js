@@ -53,6 +53,39 @@ function serializeBooking(row) {
   };
 }
 
+/**
+ * Goal 6 — the `GET /api/bookings` list item. Distinct from `serializeBooking`
+ * above (used by the create/cancel/settle/get-one endpoints, which never join
+ * `classes` and have no reason to) because the search/filter/sort list is the
+ * one place the brief asks for class and session context inline rather than
+ * requiring a second request per row.
+ */
+function serializeBookingListItem(row) {
+  return {
+    id: row.id,
+    sessionId: row.session_id,
+    memberId: row.member_id,
+    classId: row.class_id,
+    status: row.status,
+    bookedAt: row.created_at,
+    createdAt: row.created_at,
+    updatedAt: row.updated_at,
+    member: {
+      id: row.member_id,
+      fullName: row.member_full_name,
+      email: row.member_email,
+    },
+    class: {
+      id: row.class_id,
+      title: row.class_title,
+    },
+    session: {
+      id: row.session_id,
+      startsAt: row.session_starts_at,
+    },
+  };
+}
+
 function serializeEvent(row) {
   return {
     id: row.id,
@@ -88,33 +121,146 @@ async function fetchBookingsWithMember(bookingIds) {
   return bookingIds.map((id) => byId.get(String(id)));
 }
 
+// Goal 6 — search, filter, sort, and paginate, all server-side.
+//
+// Sort whitelist: client-provided column names are never interpolated into
+// SQL. `sort` only ever selects one of these three fixed column expressions;
+// an unrecognized value is rejected by `listBookingsQuerySchema` before any
+// query is built.
+const BOOKING_SORT_COLUMNS = {
+  bookedAt: 'bookings.created_at',
+  status: 'bookings.status',
+  session: 'sessions.starts_at',
+};
+const BOOKING_STATUSES = ['booked', 'waitlisted', 'cancelled', 'attended', 'no_show'];
+const DEFAULT_PAGE_SIZE = 20;
+const MAX_PAGE_SIZE = 100;
+
+const listBookingsQuerySchema = z.object({
+  q: z.string().optional(),
+  classId: idParamSchema.optional(),
+  sessionId: idParamSchema.optional(),
+  status: z
+    .enum(BOOKING_STATUSES, {
+      errorMap: () => ({ message: `must be one of ${BOOKING_STATUSES.join(', ')}.` }),
+    })
+    .optional(),
+  sort: z
+    .enum(Object.keys(BOOKING_SORT_COLUMNS), {
+      errorMap: () => ({
+        message: `must be one of ${Object.keys(BOOKING_SORT_COLUMNS).join(', ')}.`,
+      }),
+    })
+    .default('bookedAt'),
+  direction: z
+    .enum(['asc', 'desc'], { errorMap: () => ({ message: 'must be asc or desc.' }) })
+    .default('desc'),
+  page: z.coerce
+    .number({ invalid_type_error: 'must be a positive integer.' })
+    .int('must be a positive integer.')
+    .positive('must be a positive integer.')
+    .default(1),
+  pageSize: z.coerce
+    .number({ invalid_type_error: 'must be a positive integer.' })
+    .int('must be a positive integer.')
+    .positive('must be a positive integer.')
+    .max(MAX_PAGE_SIZE, `must be at most ${MAX_PAGE_SIZE}.`)
+    .default(DEFAULT_PAGE_SIZE),
+});
+
 router.get('/', authenticate, async (req, res, next) => {
   try {
-    // Joins `sessions` itself (unlike `bookingWithMemberQuery`, used
-    // elsewhere only to re-fetch a single already-authorized booking) because
-    // `scopeSessionsToInstructor` below is a predicate over `sessions`
-    // columns.
-    let query = db('bookings')
+    const parsedQuery = listBookingsQuerySchema.safeParse(req.query);
+    if (!parsedQuery.success) {
+      return res.status(400).json(zodErrorResponse(parsedQuery.error));
+    }
+    const { classId, sessionId, status, sort, direction, page, pageSize } = parsedQuery.data;
+    const q = parsedQuery.data.q?.trim();
+
+    // One base query — joins, instructor scope, and every filter — built
+    // once and cloned for the count and the page, so the two can never drift
+    // into different authorization or filter logic. Joins `sessions` (the
+    // predicate `scopeSessionsToInstructor` is written over) and `classes`
+    // (the list response includes class title inline); every join is on a
+    // single not-null foreign key, so it can never fan a booking row out into
+    // more than one result row — no DISTINCT is needed to dedupe.
+    let baseQuery = db('bookings')
       .join('sessions', 'sessions.id', 'bookings.session_id')
       .join('members', 'members.id', 'bookings.member_id')
-      .select(
-        'bookings.*',
-        'members.full_name as member_full_name',
-        'members.email as member_email',
-      )
-      .orderBy('bookings.created_at', 'asc');
+      .join('classes', 'classes.id', 'sessions.class_id');
 
-    // Scoped in the query itself, with the same predicate the session
-    // endpoints use: an instructor's WHERE clause only ever matches bookings
-    // whose session they are the primary or a co-instructor for, so no row
-    // for another instructor's session is ever fetched, let alone filtered
-    // out afterwards.
+    // Instructor scope is applied before any filter below, and — like every
+    // filter here — is ANDed onto the query, never ORed: an instructor's
+    // results can only ever be a subset of what this WHERE already restricts
+    // them to, so a later filter (including `q`) can narrow that set but can
+    // never widen it back out to another instructor's bookings.
     if (req.user.role !== 'staff') {
-      query = query.modify(scopeSessionsToInstructor, req.user.id);
+      baseQuery = baseQuery.modify(scopeSessionsToInstructor, req.user.id);
+    }
+    if (classId) {
+      baseQuery = baseQuery.where('sessions.class_id', classId);
+    }
+    if (sessionId) {
+      baseQuery = baseQuery.where('bookings.session_id', sessionId);
+    }
+    if (status) {
+      baseQuery = baseQuery.where('bookings.status', status);
+    }
+    if (q) {
+      // Grouped into one sub-`where`, so the OR is scoped to member
+      // name-or-email only and is itself ANDed onto everything above — never
+      // `query.where(scope).orWhere('members.email', ...)`, which would leak
+      // every studio booking whose member happens to match the search term.
+      const pattern = `%${q}%`;
+      baseQuery = baseQuery.where((qb) => {
+        qb.where('members.full_name', 'ilike', pattern).orWhere('members.email', 'ilike', pattern);
+      });
     }
 
-    const bookings = await query;
-    res.json({ bookings: bookings.map(serializeBooking) });
+    const sortColumn = BOOKING_SORT_COLUMNS[sort];
+    const offset = (page - 1) * pageSize;
+
+    const countQuery = baseQuery.clone().count({ count: 'bookings.id' }).first();
+    const rowsQuery = baseQuery
+      .clone()
+      .select(
+        'bookings.id',
+        'bookings.session_id',
+        'bookings.member_id',
+        'bookings.status',
+        'bookings.created_at',
+        'bookings.updated_at',
+        'members.full_name as member_full_name',
+        'members.email as member_email',
+        'sessions.class_id',
+        'sessions.starts_at as session_starts_at',
+        'classes.title as class_title',
+      )
+      // A deterministic tiebreaker on the primary key, always appended after
+      // the requested sort — even descending — so rows with equal values on
+      // the primary sort column still have one stable total order and never
+      // shuffle between pages.
+      .orderBy(sortColumn, direction)
+      .orderBy('bookings.id', 'asc')
+      .limit(pageSize)
+      .offset(offset);
+
+    const [countRow, rows] = await Promise.all([countQuery, rowsQuery]);
+    const total = Number(countRow.count);
+
+    res.json({
+      bookings: rows.map(serializeBookingListItem),
+      pagination: {
+        page,
+        pageSize,
+        total,
+        // Math.ceil(total / pageSize): 0 only when total is 0 (no filter
+        // matched anything); a page requested past the last one still
+        // reports the true totalPages for a nonzero total, e.g. total 5 /
+        // pageSize 20 is always totalPages 1, however far past it `page` was.
+        totalPages: Math.ceil(total / pageSize),
+      },
+    });
   } catch (error) {
     next(error);
   }
