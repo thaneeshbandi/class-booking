@@ -12,6 +12,12 @@ import {
   findSchedulingConflicts,
 } from '../domain/sessionConflicts.js';
 import { findActiveInstructor } from '../domain/instructors.js';
+import { toCsv } from '../domain/csv.js';
+import {
+  expandCandidateDates,
+  localTimestampString,
+} from '../domain/recurringSchedule.js';
+import { env } from '../config/env.js';
 import { db } from '../db/knex.js';
 import { authenticate } from '../middleware/authenticate.js';
 import { requireRole } from '../middleware/authorize.js';
@@ -40,6 +46,11 @@ import coInstructorsRouter from './sessionCoInstructors.js';
  * `duration_minutes` and `capacity` default from the class at creation time
  * and are then copied onto the row (006_sessions.js) — a later class-default
  * edit never reaches back to change them.
+ *
+ * Goal 7 also lives in this file: `POST /recurring` (staff-only bulk session
+ * generation from a weekly local-time pattern) and
+ * `GET /:sessionId/attendance.csv` (read-only export, same authorization
+ * boundary as `GET /:sessionId/bookings`) — see each route's own comment.
  */
 
 const router = Router();
@@ -102,6 +113,55 @@ const sessionCreateSchema = z.object({
     .min(1, 'capacity must be at least 1')
     .optional(),
 });
+
+// Goal 7 — recurring session generation. Weekdays use JavaScript's own
+// `Date.prototype.getDay()` convention (0=Sunday..6=Saturday) rather than an
+// ISO weekday number, since that is the convention every other date helper
+// in this codebase already reasons in (see `recurringSchedule.js`).
+//
+// `MAX_CANDIDATE_DATES` is an operational safety valve, not a business rule:
+// nothing in the brief bounds the date range, but an unbounded range (a
+// typo'd end year, say) would expand into an unbounded number of sequential
+// queries inside one transaction. 500 candidates is generous for a single
+// studio's weekly schedule (~9.6 years of one weekly slot) while keeping a
+// worst-case request finite and fast.
+const MAX_CANDIDATE_DATES = 500;
+
+const localTimeSchema = z
+  .string()
+  .regex(/^([01]\d|2[0-3]):[0-5]\d$/, 'must be a 24-hour HH:MM time.');
+
+const isoDateSchema = z.string().regex(/^\d{4}-\d{2}-\d{2}$/, 'must be YYYY-MM-DD.');
+
+const recurringSessionSchema = z
+  .object({
+    classId: z.coerce.number().int().positive('classId must be a positive integer.'),
+    primaryInstructorId: z.coerce
+      .number()
+      .int()
+      .positive('primaryInstructorId must be a positive integer.'),
+    roomId: z.coerce.number().int().positive('roomId must be a positive integer.'),
+    startDate: isoDateSchema,
+    endDate: isoDateSchema,
+    localStartTime: localTimeSchema,
+    weekdays: z
+      .array(z.coerce.number().int().min(0).max(6))
+      .min(1, 'weekdays must include at least one day (0=Sunday..6=Saturday).'),
+    durationMinutes: z.coerce
+      .number()
+      .int('durationMinutes must be an integer')
+      .min(1, 'durationMinutes must be at least 1')
+      .optional(),
+    capacity: z.coerce
+      .number()
+      .int('capacity must be an integer')
+      .min(1, 'capacity must be at least 1')
+      .optional(),
+  })
+  .refine((data) => data.startDate <= data.endDate, {
+    message: 'endDate must be on or after startDate.',
+    path: ['endDate'],
+  });
 
 const sessionUpdateSchema = z
   .object({
@@ -236,6 +296,153 @@ router.post('/', requireRole('staff'), async (req, res, next) => {
       });
     }
     res.status(201).json({ session: serializeSession(outcome.session) });
+  } catch (error) {
+    next(error);
+  }
+});
+
+/**
+ * Goal 7 — recurring session generation. Staff-only; mounted before
+ * `/:sessionId` below so the literal path always wins.
+ *
+ * Candidate local dates are expanded in application code
+ * (`expandCandidateDates`), then processed one at a time, in chronological
+ * order, inside a single transaction: no `Promise.all` against the shared
+ * transaction connection and no savepoints, per the approved design.
+ * Each candidate's local wall-clock time is resolved to its stored instant
+ * by PostgreSQL's own `AT TIME ZONE` (the same mechanism the demo seed
+ * already uses), so DST correctness rests on Postgres's tzdata rather than a
+ * second, hand-rolled conversion in JavaScript.
+ *
+ * A candidate is skipped, never fails the whole request, for three
+ * machine-readable reasons: `existing_session` (an exact class/instructor/
+ * room/instant match — checked first, so a repeated generation request does
+ * not blindly create duplicates), `room_conflict`, and `instructor_conflict`
+ * (both via the same `findSchedulingConflicts` every other session mutation
+ * already uses — no duplicated conflict SQL). An unexpected database error
+ * still rolls back everything generated so far in this request, since it
+ * propagates out of the transaction callback like any other.
+ *
+ * Concurrency: like `POST /api/sessions` itself, no row lock guards this
+ * check-then-insert — two concurrent recurring-generation (or single-
+ * session-creation) requests targeting an overlapping slot could both pass
+ * their own conflict check and both insert. That is the same accepted
+ * concurrency window goal 3 already has, not a new one introduced here; see
+ * `docs/architecture.md` for why an advisory lock was not added.
+ */
+router.post('/recurring', requireRole('staff'), async (req, res, next) => {
+  try {
+    const parsed = recurringSessionSchema.safeParse(req.body);
+    if (!parsed.success) {
+      return res.status(400).json(zodErrorResponse(parsed.error));
+    }
+    const {
+      classId,
+      primaryInstructorId,
+      roomId,
+      startDate,
+      endDate,
+      localStartTime,
+      weekdays,
+    } = parsed.data;
+
+    const klass = await findClass(db, classId);
+    if (!klass) return res.status(400).json({ error: 'Invalid class id.' });
+    if (klass.archived_at) {
+      return res
+        .status(409)
+        .json({ error: 'Cannot generate sessions for an archived class.' });
+    }
+
+    const room = await findRoom(db, roomId);
+    if (!room) return res.status(400).json({ error: 'Invalid room id.' });
+
+    const instructor = await findActiveInstructor(db, primaryInstructorId);
+    if (!instructor) {
+      return res.status(400).json({
+        error: 'Invalid primary instructor id: must be an active instructor.',
+      });
+    }
+
+    const durationMinutes = parsed.data.durationMinutes ?? klass.default_duration_minutes;
+    const capacity = parsed.data.capacity ?? klass.default_capacity;
+
+    const candidateDates = expandCandidateDates({ startDate, endDate, weekdays });
+    if (candidateDates.length === 0) {
+      return res.status(400).json({
+        error: 'No candidate dates fall within the given range and weekdays.',
+      });
+    }
+    if (candidateDates.length > MAX_CANDIDATE_DATES) {
+      return res.status(400).json({
+        error: `This request would generate ${candidateDates.length} candidate sessions, over the limit of ${MAX_CANDIDATE_DATES}. Narrow the date range.`,
+      });
+    }
+
+    const { created, skipped } = await db.transaction(async (trx) => {
+      const created = [];
+      const skipped = [];
+
+      for (const date of candidateDates) {
+        const { rows } = await trx.raw(
+          'SELECT (?::timestamp AT TIME ZONE ?) AS starts_at',
+          [localTimestampString(date, localStartTime), env.STUDIO_TIMEZONE],
+        );
+        const startsAt = rows[0].starts_at;
+
+        const exactDuplicate = await trx('sessions')
+          .where({
+            class_id: classId,
+            primary_instructor_id: primaryInstructorId,
+            room_id: roomId,
+            starts_at: startsAt,
+          })
+          .first();
+        if (exactDuplicate) {
+          skipped.push({
+            date,
+            startsAt: new Date(startsAt).toISOString(),
+            reason: 'existing_session',
+            conflict: { type: 'existing_session', sessionId: exactDuplicate.id },
+          });
+          continue;
+        }
+
+        const conflicts = await findSchedulingConflicts(trx, {
+          roomId,
+          instructorIds: [primaryInstructorId],
+          startsAt,
+          durationMinutes,
+        });
+        if (conflicts.length > 0) {
+          const roomConflict = conflicts.find((c) => c.type === 'room');
+          const reason = roomConflict ? 'room_conflict' : 'instructor_conflict';
+          skipped.push({
+            date,
+            startsAt: new Date(startsAt).toISOString(),
+            reason,
+            conflict: roomConflict ?? conflicts[0],
+          });
+          continue;
+        }
+
+        const [inserted] = await trx('sessions')
+          .insert({
+            class_id: classId,
+            primary_instructor_id: primaryInstructorId,
+            room_id: roomId,
+            starts_at: startsAt,
+            duration_minutes: durationMinutes,
+            capacity,
+          })
+          .returning('*');
+        created.push({ ...serializeSession(inserted), date });
+      }
+
+      return { created, skipped };
+    });
+
+    res.json({ created, skipped });
   } catch (error) {
     next(error);
   }
@@ -494,6 +701,64 @@ router.get(
         .where('bookings.session_id', req.targetSession.id)
         .orderBy('bookings.created_at', 'asc');
       res.json({ bookings: bookings.map(serializeBooking) });
+    } catch (error) {
+      next(error);
+    }
+  },
+);
+
+// Goal 7 — attendance CSV export. Same authorization boundary as
+// `/:sessionId/bookings` above (reuses `loadAuthorizedSession`): staff, the
+// session's primary instructor, or a co-instructor may export it; anyone
+// else is denied by the same database-re-read ownership check every other
+// session-scoped route in this file already uses.
+//
+// Read-only: the only queries this route runs are SELECTs. `bookings.status`
+// is read directly rather than replayed from `booking_events` — the
+// immutable history exists for auditability, not as the authoritative
+// current-status source, and every one of the five final statuses (booked,
+// waitlisted, cancelled, attended, no_show) is exported, not only settled
+// ones.
+router.get(
+  '/:sessionId/attendance.csv',
+  loadAuthorizedSession('sessionId'),
+  async (req, res, next) => {
+    try {
+      const bookings = await db('bookings')
+        .join('members', 'members.id', 'bookings.member_id')
+        .select(
+          'bookings.id',
+          'bookings.status',
+          'bookings.created_at',
+          'members.full_name',
+          'members.email',
+        )
+        .where('bookings.session_id', req.targetSession.id)
+        // Alphabetical by member is the useful order for a printed sign-in/
+        // attendance sheet; the booking id tiebreaks deterministically.
+        .orderBy('members.full_name', 'asc')
+        .orderBy('bookings.id', 'asc');
+
+      const csv = toCsv(
+        ['Booking ID', 'Member Name', 'Member Email', 'Status', 'Booked At'],
+        // `created_at` arrives from `pg` as a JS `Date`; `String(date)` would
+        // render it in the server process's own local timezone (never a
+        // studio-meaningful one) rather than a stable, unambiguous instant —
+        // `toISOString()` avoids that, matching every timestamp already
+        // returned elsewhere in this API's JSON responses.
+        bookings.map((b) => [b.id, b.full_name, b.email, b.status, b.created_at.toISOString()]),
+      );
+
+      // Filename built only from the session id and its own starts_at date —
+      // never from free-text fields (a class title, a member name) that a
+      // user could have chosen to include a path separator or control
+      // character in.
+      const dateStr = new Date(req.targetSession.starts_at).toISOString().slice(0, 10);
+      const filename = `attendance-session-${req.targetSession.id}-${dateStr}.csv`;
+
+      res.setHeader('Content-Type', 'text/csv; charset=utf-8');
+      res.setHeader('Content-Disposition', `attachment; filename="${filename}"`);
+      res.send(csv);
     } catch (error) {
       next(error);
     }

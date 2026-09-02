@@ -1,9 +1,9 @@
 # Architecture
 
-This describes the system as it actually stands after goals 1–6: accounts and roles, classes,
-sessions, the booking lifecycle, co-instructors, and server-side booking search/filter/sort
-/pagination. Goals 7–10 (recurring schedules and CSV export, the dashboard, and membership alerts)
-and the frontend are not built yet — see "What was deliberately not built" below.
+This describes the system as it actually stands after goals 1–7: accounts and roles, classes,
+sessions, the booking lifecycle, co-instructors, server-side booking search/filter/sort/pagination,
+and recurring session generation with attendance CSV export. Goals 8 and 10 (the dashboard and
+membership alerts) and the frontend are not built yet — see "What was deliberately not built" below.
 
 ## Moving pieces
 
@@ -164,14 +164,67 @@ status)` for the session/status filters, `bookings_member (member_id)` for the j
 and `session_co_instructors_user (user_id, session_id)` for the scope predicate's `EXISTS` subquery.
 Nothing new was migrated in for this goal.
 
+## Goal 7 — recurring session generation and attendance CSV export
+
+Two new routes in `routes/sessions.js`, both reusing existing machinery rather than inventing new
+mechanisms: `POST /api/sessions/recurring` (staff-only bulk generation) and
+`GET /api/sessions/:sessionId/attendance.csv` (read-only export).
+
+**Recurring generation splits into two deliberately separate steps.** Expanding a weekly local-time
+pattern into concrete calendar dates is pure, timezone-*unaware* JavaScript
+(`domain/recurringSchedule.js#expandCandidateDates`) — it only walks whole calendar days and filters
+by weekday (0=Sunday..6=Saturday, matching `Date.prototype.getDay()`), because a bare calendar date
+has no timezone ambiguity to begin with. Converting a candidate's local wall-clock time into the
+`timestamptz` instant that actually gets stored is a *separate* step, delegated entirely to
+PostgreSQL: `(local_string::timestamp AT TIME ZONE ?)`. This is not a new mechanism — it is exactly
+what `seeds/001_demo_data.js#insertSession` already does for the same problem — so DST correctness
+for this feature rests on the one implementation already trusted for it (Postgres's own IANA
+tzdata), not a second, hand-rolled JavaScript timezone algorithm that could quietly disagree with
+it. See `docs/decisions.md` for why this was chosen over a JS-side `Intl`-based conversion.
+
+**Candidates are processed sequentially, in chronological order, inside one transaction** — no
+`Promise.all` against the shared transaction connection, no savepoints, matching every other
+multi-step booking/session mutation in this codebase. For each candidate: resolve its instant, check
+for an *exact* duplicate (same class, primary instructor, room, and instant — skipped as
+`existing_session`, checked first so a repeated identical request does not blindly create
+duplicates), then reuse `findSchedulingConflicts` — the identical function `POST /api/sessions` and
+`PATCH /api/sessions/:id` already use — for `room_conflict`/`instructor_conflict`. A skip never
+fails the whole request; only a genuinely unexpected database error propagates out of the
+transaction and rolls back everything generated so far in that request. Because inserts happen
+inside the same open transaction that later candidates are checked against, a later candidate's
+conflict check already sees every session this same request inserted before it — no special
+same-batch bookkeeping is needed beyond running sequentially.
+
+**Concurrency is the same accepted window goal 3 already has, not a new one.** `POST /api/sessions`
+itself never locks anything for its own room/instructor conflict check — it is a plain
+check-then-insert inside a transaction — so two concurrent requests targeting an overlapping slot
+could in principle both pass their own check and both insert. Recurring generation reuses that exact
+check via `findSchedulingConflicts` and inherits the same limitation; no advisory lock was added, per
+`docs/decisions.md`.
+
+**Attendance CSV is read-only and reuses the exact authorization boundary of
+`GET /:sessionId/bookings`** — `loadAuthorizedSession`, the same database-re-read
+primary-instructor-or-co-instructor check used everywhere else in this file. It reads
+`bookings.status` directly rather than replaying `booking_events`: the append-only history exists
+for auditability, not as a second source of current status, and all five final statuses (`booked`,
+`waitlisted`, `cancelled`, `attended`, `no_show`) are exported, not only settled ones. CSV escaping
+is a five-line hand-written function (`domain/csv.js`) rather than a dependency, per the brief's own
+guidance not to add a library for a serializer this small.
+
 ## What was deliberately not built, and why
 
 - **A frontend.** The brief scores ten server-enforced goals; every hour spent on a UI before the
   server-side rules were all correct and tested would have been an hour not spent proving the thing
-  the assignment is actually assessing. It comes after goal 6 lands cleanly.
-- **Goals 7–10** (recurring schedule generation, CSV export, the dashboard, membership alerts) — not
-  started. Per the brief's own priority order, they come after booking search/filter/sort/pagination
-  (goal 6), now done and tested.
+  the assignment is actually assessing. It comes after the server-side goals land cleanly.
+- **Goals 8 and 10** (the dashboard, membership alerts) — not started. Per the brief's own priority
+  order, they come after recurring schedule generation and CSV export (goal 7), now done and tested.
+- **A persistent recurrence-definition table for goal 7.** The brief asks for *generating* concrete
+  sessions from a pattern, not for storing the pattern itself to re-run later; `POST
+  /api/sessions/recurring`'s request body is the pattern, used once and discarded. Nothing downstream
+  (no "re-generate this recurrence" feature) needs it remembered.
+- **An advisory lock or exclusion constraint for recurring generation.** See the goal 7 section
+  above and `docs/decisions.md` — the same accepted concurrency window `POST /api/sessions` already
+  has, not a gap specific to bulk generation.
 - **A maintained `booked_count` column.** Occupancy is always counted from `bookings` under the
   session lock (`countOccupiedSeats`) rather than cached and incrementally updated. A counter is a
   second source of truth that can drift from the rows it's supposed to summarize the moment any code

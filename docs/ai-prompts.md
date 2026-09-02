@@ -136,3 +136,81 @@ rewrote the assertion to check the thing actually at risk — that instructor B'
 never appears in instructor A's `status=booked` results, both narrowed by `sessionId` and unnarrowed
 across every session instructor A can see — rather than an incidental assumption about how many
 sessions instructor A happens to have in this run. Re-run and passing before being committed.
+
+## Implementing recurring session generation and attendance CSV export (goal 7)
+
+### Prompt
+
+One long, highly specific instruction given at the start of this session, split into parts A–F. In
+substance: read `README.md`, `CLAUDE.md`, every `docs/*.md` file, all backend source, all migrations
+and all existing tests first; implement `POST /api/sessions/recurring` (staff-only; instructors denied
+even with a spoofed role; candidates expanded in application code from a weekly local-time pattern,
+each converted to its stored instant only after determining the local calendar date/time, using
+`STUDIO_TIMEZONE`, with DST handled correctly — an example given explicitly: a fixed local 09:00 must
+stay 09:00 local across a DST transition, never silently drift to 08:00 or 10:00); reuse
+`findSchedulingConflicts` rather than duplicating conflict SQL; process candidates sequentially in
+chronological order inside one transaction (no `Promise.all` on the shared connection, no savepoints);
+report both created sessions and skipped candidates with a small fixed, machine-readable reason set
+(`room_conflict`, `instructor_conflict`, `existing_session` for an exact duplicate); reject an
+archived class outright; implement `GET /api/sessions/:sessionId/attendance.csv` with the exact same
+authorization boundary as `GET /:sessionId/bookings`, reading `bookings.status` directly rather than
+replaying `booking_events`, exporting all five final statuses, with correct CSV escaping for commas/
+quotes/newlines and no large dependency for "a tiny serializer"; keep the whole thing read-only; write
+a comprehensive integration test suite matching an explicit list of required scenarios for both
+features; run the full verification sequence (targeted tests, full suite twice, lint, a fresh
+`db:reset` and the suite again, a real running-server smoke test); update the same five `docs/` files
+plus `SUBMISSION.md`; commit as one incremental commit; and close by explicitly ruling out starting
+goals 8 or 10 in this milestone.
+
+### What was produced
+
+`domain/recurringSchedule.js` (pure calendar-date expansion, no timezone conversion of its own —
+see "What was correct" below) and `domain/csv.js` (a five-line RFC-4180-shaped escaper); two new
+routes in `routes/sessions.js` — `POST /recurring` and `GET /:sessionId/attendance.csv` — each with
+its own extensive comment explaining the authorization/conflict/concurrency reasoning; three new test
+files (`recurringSchedule.test.js`, a pure-unit suite; `recurringSessions.test.js` and
+`attendanceCsv.test.js`, both full HTTP integration suites) covering every scenario the prompt listed,
+including a DST-crossing test that independently cross-checks the database-produced instant against
+`Intl`-formatted local time rather than trusting the implementation to grade its own homework; and
+this round of documentation updates.
+
+### What was correct
+
+Reusing `seeds/001_demo_data.js`'s existing `(local_string::timestamp AT TIME ZONE ?)` pattern for
+the local-to-instant conversion, discovered while reading the seed file as instructed rather than
+immediately reaching for a hand-rolled `Intl`-based algorithm, worked exactly as needed on the first
+pass — the DST integration test (a year-long weekly recurrence in `Europe/London`, independently
+verified against `Intl`) passed first try, and this decision is recorded as Decision 9 in
+`docs/decisions.md`. The conflict-check/duplicate-check/insert loop, reusing `findSchedulingConflicts`
+unchanged, also worked correctly on the first pass across every conflict/duplicate/boundary test.
+
+### What was wrong, and what was corrected
+
+Two issues, both caught by tests or smoke-testing before being committed — not found by re-reading the
+code afterward:
+
+1. **A test-fixture date-collision bug (not an application bug).** The first version of
+   `attendanceCsv.test.js` scheduled its fixture sessions at small fixed hour offsets
+   (`Date.now() + 24h/48h/96h/...`) from "now". The full suite's first run failed a co-instructor-add
+   call with an unexpected 409 instructor conflict — because those offsets (1–5 days out) landed
+   inside `seeds/001_demo_data.js`'s own near-future demo-session window (roughly -21..+16 days),
+   colliding with seeded data. The fix moved to a far-future randomized window, matching
+   `sessions.test.js`/`coInstructors.test.js`'s existing convention. That first fix still wasn't wide
+   enough: because every session in this file carries a real booking and is therefore never deleted,
+   a second full-suite run failed the same way again, this time against the *previous run's own*
+   leftover fixture — the random window (120 days) was still narrow relative to the fixed offsets used
+   *within* one run (24h/48h/72h/96h/120h apart), which resonate against each other far more than a
+   single-point collision analysis suggests. Fixed by widening the random window by roughly two orders
+   of magnitude (mirroring `sessions.test.js`'s own `p6Base` ratio of range to offset spread) and
+   confirmed stable across three consecutive runs before being folded into the full-suite verification.
+2. **A real application bug, caught by smoke-testing, not by the automated suite at the time it was
+   found.** Manually exporting a CSV from the real running server showed a "Booked At" cell reading
+   `Wed Sep 02 2026 09:55:21 GMT+0530 (India Standard Time)` — the smoke-testing machine's own local
+   timezone — instead of a stable timestamp. `bookings.created_at` arrives from `pg` as a JS `Date`
+   object; `domain/csv.js`'s `escapeCsvField` calls `String(value)` on whatever it's given, and
+   `String(date)` uses `Date.prototype.toString()`, which renders in the *process's* local timezone —
+   not a studio-meaningful one, and not stable across deployments. Fixed in `routes/sessions.js` by
+   calling `.toISOString()` before handing the value to the CSV serializer, matching every other
+   timestamp this API already returns; a regression test asserting every "Booked At" cell matches ISO
+   8601 UTC was added to `attendanceCsv.test.js`, and the fix was re-verified against the real running
+   server before being folded into the full-suite verification.

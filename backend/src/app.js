@@ -9,15 +9,16 @@ import membersRouter from './routes/members.js';
 import sessionsRouter from './routes/sessions.js';
 
 /**
- * Recurring generation, CSV export, the dashboard, and membership alerts are
- * not implemented yet. What is here: authentication/authorization (goal 1),
- * classes (goal 2), session scheduling with conflict detection (goal 3), the
- * booking lifecycle with FIFO waitlist promotion and immutable history
- * (goal 4), and co-instructor management (goal 5) — all scoped and
- * authorized the same way throughout: deny-by-default access, resource-level
- * ownership re-derived from the database on every request (never a
- * client-supplied id), and collection scoping performed in SQL rather than
- * in JavaScript after the fact.
+ * The dashboard and membership alerts (goals 8 and 10) are not implemented
+ * yet. What is here: authentication/authorization (goal 1), classes (goal
+ * 2), session scheduling with conflict detection (goal 3), the booking
+ * lifecycle with FIFO waitlist promotion and immutable history (goal 4),
+ * co-instructor management (goal 5), server-side booking search/filter/sort
+ * /pagination (goal 6), and recurring session generation plus attendance CSV
+ * export (goal 7) — all scoped and authorized the same way throughout:
+ * deny-by-default access, resource-level ownership re-derived from the
+ * database on every request (never a client-supplied id), and collection
+ * scoping performed in SQL rather than in JavaScript after the fact.
  */
 export function createApp() {
   const app = express();

@@ -10,7 +10,8 @@ happened, not a retrofit.
 | 1 | 2026-08-31 – 2026-09-01 | Repo scaffold, `README.md`/`SUBMISSION.md`/`CLAUDE.md` in place as stubs. No code yet. |
 | 2 | 2026-09-02, early | Backend scaffold (Express + validated env config); the full schema as migrations 001–010; an idempotent demo seed; a minimal server with a `/health` check; `tests/schema.test.js` verifying the schema live against Postgres. Then, in the same session: authentication/authorization (goal 1), classes and sessions with conflict detection (goals 2–3), co-instructor management (goal 5). |
 | 3 | 2026-09-02, later the same day | Goal 4 — the full booking lifecycle — in the eight phases described in that session's own account below, plus the documentation describing it. |
-| 4 (this one) | 2026-09-02, later still | Goal 6 — replaced the minimal, unfiltered `GET /api/bookings` with the full server-side search/filter/sort/pagination/count endpoint, its authorization regression suite, and this documentation update. |
+| 4 | 2026-09-02, later still | Goal 6 — replaced the minimal, unfiltered `GET /api/bookings` with the full server-side search/filter/sort/pagination/count endpoint, its authorization regression suite, and this documentation update. |
+| 5 (this one) | 2026-09-02, later still | Goal 7 — recurring session generation (`POST /api/sessions/recurring`) and attendance CSV export (`GET /api/sessions/:sessionId/attendance.csv`), their test suites, and this documentation update. |
 
 Session 2's five foundation commits share one timestamp to the minute in `git log`, which is a real
 gap in this record: they clearly did not all land in the same sixty seconds, and no finer-grained
@@ -106,12 +107,61 @@ more against the fresh copy, and the running server was smoke-tested over real H
 listing, a search, an out-of-range `pageSize`, an invalid `status`/`sort`, and an unauthenticated
 request — before this file was updated.
 
+## Session 5 — goal 7
+
+Read in order before writing any code: `README.md`, `CLAUDE.md`, all five `docs/*.md` files, then the
+entire existing backend source and every migration — specifically so recurring generation would reuse
+`findSchedulingConflicts` rather than duplicating conflict SQL, and so the CSV endpoint would reuse
+`loadAuthorizedSession` rather than re-deriving the primary-instructor-or-co-instructor check goal 5
+already settled.
+
+Implementation order: the pure calendar-date expansion (`domain/recurringSchedule.js`) was written and
+unit-tested first, since it has no database dependency and every later piece builds on it. While
+writing the local-time-to-instant conversion, `seeds/001_demo_data.js#insertSession` turned out to
+already solve exactly this problem via PostgreSQL's `AT TIME ZONE` — reusing that (Decision 9) meant
+the module stayed pure calendar-date logic with no timezone algorithm of its own to get subtly wrong.
+The `POST /api/sessions/recurring` route came next (reusing `findClass`/`findRoom`/
+`findActiveInstructor`/`findSchedulingConflicts`, all already in `routes/sessions.js` from goal 3),
+then the read-only CSV route and its five-line serializer (`domain/csv.js`), each with its own test
+file matching the brief's own listed test categories.
+
+Two things were caught by tests and fixed before landing (see `docs/ai-prompts.md` for the
+prompt/output/correction on each):
+
+1. **A test-fixture date-collision bug**, not an application bug: the CSV test file's near-future
+   fixture-session offsets landed inside the demo seed's own near-future scheduling window, and
+   separately, its narrow randomized far-future window was still narrow enough relative to its own
+   fixed per-describe-block offsets to occasionally collide with a *previous run's own leftover*
+   fixture sessions (every session in that file carries a real booking, so none of them are ever
+   deleted). Both were fixed by widening and repositioning the random window, following the same
+   "wide random range relative to small fixed offsets" reasoning `sessions.test.js`'s own `p6Base`
+   already documents.
+2. **A real application bug**, caught only by actually reading the smoke-tested CSV output, not by
+   any automated test at the time: the "Booked At" column rendered as
+   `Wed Sep 02 2026 09:55:21 GMT+0530 (India Standard Time)` — the server process's own local
+   timezone — instead of a stable timestamp, because `bookings.created_at` arrives from `pg` as a JS
+   `Date` and the CSV serializer stringified it with the implicit, locale/timezone-dependent
+   `Date.prototype.toString()` rather than `toISOString()`. Fixed in `routes/sessions.js`, with a
+   regression test added asserting every "Booked At" cell matches ISO 8601 UTC.
+
+No time estimate was written down before starting, for the same reason `CLAUDE.md` gives for goals 4
+and 6: recording one now would be inventing a development story after the fact. What's true and
+checkable is the verification record: the two new test files were run individually first, then the
+full suite (`npm test --test-concurrency=1`) twice, then `npm run lint`, then a fresh `db:reset` and
+the full suite again against it, then the real server was started and smoke-tested over real HTTP —
+recurring generation, a room-conflict skip, the attendance CSV, and instructor authorization denials
+for both new endpoints — which is what caught the CSV timestamp bug above; the fix was verified
+against the running server and the full suite was run twice more before this file was updated.
+
 ## What was cut
 
 Nothing was cut from goal 4's own scope — all eight specified phases, including the full required
 concurrency-test battery, landed. Nothing was cut from goal 6's scope either — search, every filter,
 the sort whitelist with its deterministic tiebreaker, pagination, and the total count all landed, along
-with the full IDOR/security regression battery the brief asked for. At the project level, goals 7–10
-(recurring schedule generation and CSV export, the dashboard, and membership alerts) and the entire
-frontend have not been started, per the brief's own stated priority: finishing fewer goals solidly over
-starting every goal partially. They're next, in that order, matching the brief's numbering.
+with the full IDOR/security regression battery the brief asked for. Nothing was cut from goal 7's scope
+either — recurring generation's full candidate-expansion/conflict/duplicate/DST behavior and the
+attendance CSV's full authorization/escaping/status battery both landed, matching every test category
+the brief listed. At the project level, goals 8 and 10 (the dashboard and membership alerts) and the
+entire frontend have not been started, per the brief's own stated priority: finishing fewer goals
+solidly over starting every goal partially. They're next, in that order, matching the brief's
+numbering.

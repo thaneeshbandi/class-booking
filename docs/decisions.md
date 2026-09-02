@@ -114,3 +114,59 @@ backend/src/domain/sessionConflicts.js`), not invented for this file.
   a booking list are almost always checking on recent activity, not the studio's oldest booking, so
   newest-first is the more defensible default for the actual use case the brief describes ("finding
   bookings").
+
+## Decision 9
+
+- **Chose:** Resolve each recurring-generation candidate's local wall-clock time to its stored
+  `timestamptz` instant with PostgreSQL's own `(local_string::timestamp AT TIME ZONE ?)`, run once
+  per candidate inside the generation transaction.
+- **Rejected:** A hand-rolled JavaScript conversion — the standard "guess an instant, ask `Intl` what
+  wall-clock time that instant reads as in the target zone, correct the guess by the difference,
+  repeat" iterative technique that libraries like `luxon`/`date-fns-tz` use, implemented directly
+  against `Intl.DateTimeFormat` with no new dependency.
+- **Why:** `seeds/001_demo_data.js#insertSession` already solves this exact problem this exact way —
+  DST correctness for the whole application already rests on Postgres's own IANA tzdata through that
+  one code path. Writing a second, independent DST-aware conversion in JavaScript for goal 7 would
+  mean two implementations of the same non-trivial correctness property that could, in principle,
+  quietly disagree with each other at exactly the DST-transition dates where it matters most. Reusing
+  the existing mechanism is both less code and a stronger correctness guarantee than a from-scratch
+  one would be, at the cost of one extra tiny round-trip per candidate inside the transaction — cheap
+  at this scale, and no different in kind from the per-candidate conflict-check queries the design
+  already requires.
+
+## Decision 10
+
+- **Chose:** `POST /api/sessions/recurring` rejects a request whose date range and weekday pattern
+  would expand to more than 500 candidate sessions, with a 400 before opening any transaction.
+- **Rejected:** No limit at all.
+- **Why:** Nothing in the brief bounds the date range a recurring request can cover, and the brief
+  explicitly says not to invent requirements — so this is not a business rule, it's an operational
+  safety valve: an unbounded range (a typo'd end year, say) would otherwise expand into an unbounded
+  number of sequential per-candidate queries inside one open transaction. 500 candidates is generous
+  for a single studio's weekly schedule (roughly 9.6 years of one weekly slot) while keeping a
+  worst-case request's cost finite and fast to reason about.
+
+## Decision 11
+
+- **Chose:** A candidate that exactly matches an already-existing session (same class, primary
+  instructor, room, and instant) is skipped with the specific reason `existing_session`, checked
+  *before* the general room/instructor conflict check.
+- **Rejected:** Letting an exact duplicate fall through to the generic `room_conflict`/
+  `instructor_conflict` check, which would also correctly skip it (a session cannot overlap itself
+  any more completely) but under a less informative reason.
+- **Why:** The brief specifically asks for repeated identical generation requests not to blindly
+  create duplicates, with a suggested reason name of exactly `existing_session`. An exact match is a
+  qualitatively different situation from a partial scheduling conflict with some *other* session — a
+  caller re-running the same request to see what's still missing needs to be able to tell "this exact
+  session already exists" apart from "this slot is blocked by something else" — so it gets its own
+  reason rather than being folded into the conflict machinery's output.
+
+## Decision 12
+
+- **Chose:** The attendance CSV's own small serializer (`domain/csv.js`, roughly a dozen lines) over
+  a CSV library.
+- **Rejected:** `csv-stringify` or a similar package.
+- **Why:** The brief itself says not to add a large dependency for a tiny serializer, and RFC 4180's
+  escaping rule really is one `if`: quote a field only when it contains a comma, a double quote, or a
+  line break, and double any embedded quote. A five-line function is easier to read, review, and
+  trust than auditing a new dependency's API and defaults for this single call site.

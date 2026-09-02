@@ -45,6 +45,7 @@ export async function startTestServer() {
               status: res.statusCode,
               json,
               raw,
+              headers: res.headers,
               // The Cookie header value a subsequent request would send:
               // just "name=value", stripped of attributes like Path/HttpOnly.
               cookie: setCookieHeader ? setCookieHeader[0].split(';')[0] : null,
