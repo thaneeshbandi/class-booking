@@ -363,3 +363,238 @@ describe('POST /api/bookings — creation', () => {
     assert.equal(Number(occupied.count), 1, 'I1: occupied must never exceed capacity');
   });
 });
+
+async function bookViaApi(cookie, sessionId, memberId) {
+  const res = await server.request({
+    method: 'POST',
+    path: '/api/bookings',
+    cookie,
+    body: { sessionId: String(sessionId), memberId: String(memberId) },
+  });
+  assert.equal(res.status, 201, res.raw);
+  return res.json.booking;
+}
+
+function cancelViaApi(cookie, bookingId, body) {
+  return server.request({
+    method: 'POST',
+    path: `/api/bookings/${bookingId}/cancel`,
+    cookie,
+    body: body ?? {},
+  });
+}
+
+describe('POST /api/bookings/:bookingId/cancel — cancellation and waitlist promotion', () => {
+  it('cancels a booked booking that has no one waitlisted (no promotion)', async () => {
+    const session = await createRawSession({ capacity: 5 });
+    const member = await createMember();
+    const cookie = await loginAs(fixture.staff);
+    const booking = await bookViaApi(cookie, session.id, member.id);
+
+    const res = await cancelViaApi(cookie, booking.id);
+    assert.equal(res.status, 200, res.raw);
+    assert.equal(res.json.booking.status, 'cancelled');
+    assert.deepEqual(res.json.promoted, []);
+  });
+
+  it('cancels a waitlisted booking; frees no seat, so nothing is promoted', async () => {
+    const session = await createRawSession({ capacity: 1 });
+    const [holder, waiter] = await Promise.all([createMember(), createMember()]);
+    const cookie = await loginAs(fixture.staff);
+    await bookViaApi(cookie, session.id, holder.id);
+    const waitlisted = await bookViaApi(cookie, session.id, waiter.id);
+    assert.equal(waitlisted.status, 'waitlisted');
+
+    const res = await cancelViaApi(cookie, waitlisted.id);
+    assert.equal(res.status, 200, res.raw);
+    assert.equal(res.json.booking.status, 'cancelled');
+    assert.deepEqual(res.json.promoted, []);
+  });
+
+  it('cancelling a booked booking promotes the earliest waitlisted booking', async () => {
+    const session = await createRawSession({ capacity: 1 });
+    const [holder, first, second] = await Promise.all([
+      createMember(),
+      createMember(),
+      createMember(),
+    ]);
+    const cookie = await loginAs(fixture.staff);
+    const held = await bookViaApi(cookie, session.id, holder.id);
+    const firstWaitlisted = await bookViaApi(cookie, session.id, first.id);
+    const secondWaitlisted = await bookViaApi(cookie, session.id, second.id);
+    assert.equal(firstWaitlisted.status, 'waitlisted');
+    assert.equal(secondWaitlisted.status, 'waitlisted');
+
+    const res = await cancelViaApi(cookie, held.id);
+    assert.equal(res.status, 200, res.raw);
+    assert.equal(res.json.promoted.length, 1);
+    assert.equal(String(res.json.promoted[0].id), String(firstWaitlisted.id));
+    assert.equal(res.json.promoted[0].status, 'booked');
+
+    const stillWaiting = await db('bookings').where({ id: secondWaitlisted.id }).first();
+    assert.equal(stillWaiting.status, 'waitlisted');
+  });
+
+  it('promotes across separate cancellations in FIFO order', async () => {
+    const session = await createRawSession({ capacity: 2 });
+    const members = await Promise.all([1, 2, 3, 4, 5].map(() => createMember()));
+    const cookie = await loginAs(fixture.staff);
+    const bookings = [];
+    for (const member of members) {
+      bookings.push(await bookViaApi(cookie, session.id, member.id));
+    }
+    // capacity 2: first two booked, next three waitlisted, in creation order.
+    assert.deepEqual(bookings.map((b) => b.status), ['booked', 'booked', 'waitlisted', 'waitlisted', 'waitlisted']);
+
+    const firstCancel = await cancelViaApi(cookie, bookings[0].id);
+    assert.equal(firstCancel.json.promoted.length, 1);
+    assert.equal(String(firstCancel.json.promoted[0].id), String(bookings[2].id));
+
+    const secondCancel = await cancelViaApi(cookie, bookings[1].id);
+    assert.equal(secondCancel.json.promoted.length, 1);
+    assert.equal(String(secondCancel.json.promoted[0].id), String(bookings[3].id));
+
+    const lastStillWaiting = await db('bookings').where({ id: bookings[4].id }).first();
+    assert.equal(lastStillWaiting.status, 'waitlisted');
+  });
+
+  it('writes an automatic status_changed promotion event with caused_by_booking_id set to the cancelled booking', async () => {
+    const session = await createRawSession({ capacity: 1 });
+    const [holder, waiter] = await Promise.all([createMember(), createMember()]);
+    const cookie = await loginAs(fixture.staff);
+    const held = await bookViaApi(cookie, session.id, holder.id);
+    const waitlisted = await bookViaApi(cookie, session.id, waiter.id);
+
+    const res = await cancelViaApi(cookie, held.id);
+    assert.equal(res.status, 200, res.raw);
+
+    const promotionEvent = await db('booking_events')
+      .where({ booking_id: waitlisted.id, event_type: 'status_changed' })
+      .first();
+    assert.equal(promotionEvent.from_status, 'waitlisted');
+    assert.equal(promotionEvent.to_status, 'booked');
+    assert.equal(promotionEvent.is_automatic, true);
+    assert.equal(String(promotionEvent.caused_by_booking_id), String(held.id));
+    assert.equal(String(promotionEvent.actor_user_id), String(fixture.staff.id));
+
+    const cancelEvent = await db('booking_events')
+      .where({ booking_id: held.id, event_type: 'status_changed' })
+      .first();
+    assert.equal(cancelEvent.from_status, 'booked');
+    assert.equal(cancelEvent.to_status, 'cancelled');
+    assert.equal(cancelEvent.is_automatic, false);
+    assert.equal(String(cancelEvent.actor_user_id), String(fixture.staff.id));
+  });
+
+  it('rejects cancellation once the session has started', async () => {
+    const session = await createRawSession({ startsAt: futureDate(24), capacity: 5 });
+    const member = await createMember();
+    const cookie = await loginAs(fixture.staff);
+    const booking = await bookViaApi(cookie, session.id, member.id);
+
+    // Move the session into the past directly — this test is about the
+    // cancel-timing rule, not scheduling, and started sessions are otherwise
+    // unreachable through the conflict-checked session endpoints.
+    await db('sessions').where({ id: session.id }).update({ starts_at: futureDate(-1) });
+
+    const res = await cancelViaApi(cookie, booking.id);
+    assert.equal(res.status, 409, res.raw);
+  });
+
+  it('still allows cancellation after the member’s membership has since expired', async () => {
+    const session = await createRawSession({ capacity: 5 });
+    const today = await studioToday();
+    const member = await createMember({ expiresOn: addDays(today, 3) });
+    const cookie = await loginAs(fixture.staff);
+    const booking = await bookViaApi(cookie, session.id, member.id);
+
+    await db('members').where({ id: member.id }).update({ membership_expires_on: addDays(today, -5) });
+
+    const res = await cancelViaApi(cookie, booking.id);
+    assert.equal(res.status, 200, res.raw);
+    assert.equal(res.json.booking.status, 'cancelled');
+  });
+
+  it('rejects cancelling a booking that is not booked or waitlisted', async () => {
+    const session = await createRawSession({ capacity: 5 });
+    const member = await createMember();
+    const cookie = await loginAs(fixture.staff);
+    const booking = await bookViaApi(cookie, session.id, member.id);
+
+    const first = await cancelViaApi(cookie, booking.id);
+    assert.equal(first.status, 200, first.raw);
+
+    const second = await cancelViaApi(cookie, booking.id);
+    assert.equal(second.status, 409, second.raw);
+    assert.match(second.json.error, /cancelled/);
+  });
+
+  it('records an optional note as a separate note event', async () => {
+    const session = await createRawSession({ capacity: 5 });
+    const member = await createMember();
+    const cookie = await loginAs(fixture.staff);
+    const booking = await bookViaApi(cookie, session.id, member.id);
+
+    const res = await cancelViaApi(cookie, booking.id, { note: 'Member called ahead.' });
+    assert.equal(res.status, 200, res.raw);
+
+    const noteEvent = await db('booking_events')
+      .where({ booking_id: booking.id, event_type: 'note' })
+      .first();
+    assert.equal(noteEvent.note, 'Member called ahead.');
+    assert.equal(noteEvent.from_status, null);
+    assert.equal(noteEvent.to_status, null);
+  });
+
+  it('denies an instructor cancelling a booking', async () => {
+    const session = await createRawSession({ capacity: 5 });
+    const member = await createMember();
+    const cookie = await loginAs(fixture.staff);
+    const booking = await bookViaApi(cookie, session.id, member.id);
+
+    const instructorCookie = await loginAs(fixture.instructorA);
+    const res = await cancelViaApi(instructorCookie, booking.id);
+    assert.equal(res.status, 403);
+  });
+
+  it('404s for an unknown booking id', async () => {
+    const cookie = await loginAs(fixture.staff);
+    const res = await cancelViaApi(cookie, '999999999');
+    assert.equal(res.status, 404);
+  });
+
+  it('under two simultaneous cancellations of two different booked bookings, each promotion is correct and occupancy invariants hold', async () => {
+    const session = await createRawSession({ capacity: 2 });
+    const members = await Promise.all([1, 2, 3, 4].map(() => createMember()));
+    const cookie = await loginAs(fixture.staff);
+    const bookings = [];
+    for (const member of members) {
+      bookings.push(await bookViaApi(cookie, session.id, member.id));
+    }
+    assert.deepEqual(bookings.map((b) => b.status), ['booked', 'booked', 'waitlisted', 'waitlisted']);
+
+    const [resA, resB] = await Promise.all([
+      cancelViaApi(cookie, bookings[0].id),
+      cancelViaApi(cookie, bookings[1].id),
+    ]);
+    assert.equal(resA.status, 200, resA.raw);
+    assert.equal(resB.status, 200, resB.raw);
+
+    const promotedIds = new Set(
+      [...resA.json.promoted, ...resB.json.promoted].map((b) => String(b.id)),
+    );
+    assert.deepEqual(promotedIds, new Set([String(bookings[2].id), String(bookings[3].id)]));
+
+    const occupied = await db('bookings')
+      .where({ session_id: session.id })
+      .whereIn('status', ['booked', 'attended', 'no_show'])
+      .count({ count: '*' })
+      .first();
+    assert.equal(Number(occupied.count), 2, 'I1: occupied must never exceed capacity');
+
+    const anyWaitlisted = await db('bookings')
+      .where({ session_id: session.id, status: 'waitlisted' })
+      .first();
+    assert.equal(anyWaitlisted, undefined, 'I2: no waitlisted booking may remain once seats are free');
+  });
+});
