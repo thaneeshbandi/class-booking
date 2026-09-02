@@ -85,6 +85,12 @@ export const envSchema = z.object({
 
   // Consumed only by the seed script, never by the running server.
   SEED_PASSWORD: z.string().min(8).optional(),
+
+  // The browser-side app's own origin, for CORS (src/middleware/cors.js). The
+  // auth cookie is httpOnly and cross-site, so the frontend must be an
+  // explicit allowed origin, never `*` — a wildcard is incompatible with
+  // `Access-Control-Allow-Credentials: true`, which cookie-based auth needs.
+  FRONTEND_ORIGIN: z.string().url().default('http://localhost:5173'),
 });
 
 export class EnvValidationError extends Error {

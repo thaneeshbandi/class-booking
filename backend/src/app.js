@@ -2,12 +2,15 @@ import express from 'express';
 
 import { env } from './config/env.js';
 import { db } from './db/knex.js';
+import { cors } from './middleware/cors.js';
 import authRouter from './routes/auth.js';
 import bookingsRouter from './routes/bookings.js';
 import classesRouter from './routes/classes.js';
 import dashboardRouter from './routes/dashboard.js';
 import membersRouter from './routes/members.js';
+import roomsRouter from './routes/rooms.js';
 import sessionsRouter from './routes/sessions.js';
+import usersRouter from './routes/users.js';
 
 /**
  * All ten mandatory goals live here: authentication/authorization (goal 1),
@@ -21,10 +24,17 @@ import sessionsRouter from './routes/sessions.js';
  * throughout: deny-by-default access, resource-level ownership re-derived
  * from the database on every request (never a client-supplied id), and
  * collection/aggregate scoping performed in SQL rather than in JavaScript
- * after the fact. Only the frontend and the optional stretch ideas remain.
+ * after the fact.
+ *
+ * `roomsRouter`/`usersRouter` were added for the frontend milestone — small,
+ * read-only listings the ten goals never needed on their own (every existing
+ * write path only ever validated a single client-supplied room/instructor
+ * id) but that session-scheduling forms genuinely cannot function without;
+ * see each route file's own comment and `docs/decisions.md`.
  */
 export function createApp() {
   const app = express();
+  app.use(cors);
   app.use(express.json());
 
   app.use('/api/auth', authRouter);
@@ -33,6 +43,8 @@ export function createApp() {
   app.use('/api/bookings', bookingsRouter);
   app.use('/api/members', membersRouter);
   app.use('/api/dashboard', dashboardRouter);
+  app.use('/api/rooms', roomsRouter);
+  app.use('/api/users', usersRouter);
 
   app.get('/health', async (_req, res) => {
     try {
