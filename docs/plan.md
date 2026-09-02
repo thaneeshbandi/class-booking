@@ -11,7 +11,8 @@ happened, not a retrofit.
 | 2 | 2026-09-02, early | Backend scaffold (Express + validated env config); the full schema as migrations 001–010; an idempotent demo seed; a minimal server with a `/health` check; `tests/schema.test.js` verifying the schema live against Postgres. Then, in the same session: authentication/authorization (goal 1), classes and sessions with conflict detection (goals 2–3), co-instructor management (goal 5). |
 | 3 | 2026-09-02, later the same day | Goal 4 — the full booking lifecycle — in the eight phases described in that session's own account below, plus the documentation describing it. |
 | 4 | 2026-09-02, later still | Goal 6 — replaced the minimal, unfiltered `GET /api/bookings` with the full server-side search/filter/sort/pagination/count endpoint, its authorization regression suite, and this documentation update. |
-| 5 (this one) | 2026-09-02, later still | Goal 7 — recurring session generation (`POST /api/sessions/recurring`) and attendance CSV export (`GET /api/sessions/:sessionId/attendance.csv`), their test suites, and this documentation update. |
+| 5 | 2026-09-02, later still | Goal 7 — recurring session generation (`POST /api/sessions/recurring`) and attendance CSV export (`GET /api/sessions/:sessionId/attendance.csv`), their test suites, and this documentation update. |
+| 6 (this one) | 2026-09-02, later still | Goal 8 — the staff-only dashboard (`GET /api/dashboard`), its test suite, a pre-existing test-suite flakiness found and fixed along the way, and this documentation update. |
 
 Session 2's five foundation commits share one timestamp to the minute in `git log`, which is a real
 gap in this record: they clearly did not all land in the same sixty seconds, and no finer-grained
@@ -153,6 +154,49 @@ recurring generation, a room-conflict skip, the attendance CSV, and instructor a
 for both new endpoints — which is what caught the CSV timestamp bug above; the fix was verified
 against the running server and the full suite was run twice more before this file was updated.
 
+## Session 6 — goal 8
+
+Read in order before writing any code: `README.md`, `CLAUDE.md`, every `docs/*.md` file, the current
+`SUBMISSION.md`, the entire existing backend source, migrations, seed, and test suite, and `git log` —
+specifically to find whether any earlier commit had already established a semantic for "bookings made
+today"/"no-shows this week"/"members currently waitlisted" before writing a single query. Two of the
+three turned out to already have a forward-looking comment committed against them: the
+`bookings_created_at` index (`008_bookings.js`) names "bookings made today" as its goal-8 use case, and
+`sessions_starts_at` (`006_sessions.js`) names "Dashboard day/week windows" — both consistent with, and
+read before, being given the exact same semantics as an instruction for this session.
+
+Implementation order: the seven aggregate query functions (`domain/dashboard.js`) were written and
+smoke-tested directly against the database (a throwaway Node script, not the test suite) before any
+route or test existed, specifically to catch a SQL syntax mistake — a bad `generate_series` alias, a
+mistyped `AT TIME ZONE` composition — as cheaply as possible; the smoke script's own output on the
+real seeded database is also what made the case for delta-based rather than absolute-value testing
+concrete rather than theoretical (`bookingsByClass` had over a dozen entries from other suites'
+leftover permanent fixtures before this file's own tests had inserted anything). The route
+(`routes/dashboard.js`) and `app.js` wiring came next, then `tests/dashboard.test.js`, written last and
+matching the brief's own ten listed test categories directly.
+
+One thing went wrong during verification, caught by the full suite (not the new dashboard tests
+themselves, which passed clean on the first run) — see `docs/ai-prompts.md` for the full account: the
+second `npm test --test-concurrency=1` run of the full suite failed a completely unrelated,
+pre-existing test in `sessions.test.js` ("lets staff delete a session with no bookings") with a
+spurious 409. The root cause predates this session entirely — `sessions.test.js`'s "Undeletable
+Session Fixture" test uses a fixed, unrandomized `WINDOW_START`-relative offset for a session that, by
+its own design, is never deleted, so every one of this project's many `npm test` runs across today's
+several milestones left one more permanent leftover behind at nearly the same instant, and enough had
+finally accumulated to instructor-conflict with an unrelated test two hours away. Fixed by giving that
+fixture the same wide randomized-offset treatment (`p6Base`) the file already uses elsewhere for
+exactly this failure mode, then a fresh `db:reset` to clear the accumulated leftovers and three clean
+consecutive full-suite runs before continuing.
+
+No time estimate was written down before starting, for the same reason `CLAUDE.md` gives for every
+earlier goal in this record: recording one now would be inventing a development story after the fact.
+What's true and checkable is the verification record: the new test file was run individually first (26
+tests, clean on the first run), then the full suite twice (the second run is what surfaced the
+pre-existing flakiness above), then the fix, a fresh `db:reset`, and three more consecutive clean full
+-suite runs against it, `npm run lint` (clean throughout, no fix needed), and the real running server
+smoke-tested over real HTTP — the full dashboard payload as staff, and a 403/401 for an instructor and
+an unauthenticated request — before this file was updated.
+
 ## What was cut
 
 Nothing was cut from goal 4's own scope — all eight specified phases, including the full required
@@ -161,7 +205,9 @@ the sort whitelist with its deterministic tiebreaker, pagination, and the total 
 with the full IDOR/security regression battery the brief asked for. Nothing was cut from goal 7's scope
 either — recurring generation's full candidate-expansion/conflict/duplicate/DST behavior and the
 attendance CSV's full authorization/escaping/status battery both landed, matching every test category
-the brief listed. At the project level, goals 8 and 10 (the dashboard and membership alerts) and the
-entire frontend have not been started, per the brief's own stated priority: finishing fewer goals
-solidly over starting every goal partially. They're next, in that order, matching the brief's
-numbering.
+the brief listed. Nothing was cut from goal 8's scope either — all four headline numbers, both
+breakdowns, and the eight-week attendance chart landed, each SQL-aggregated and covered by the
+boundary/authorization/determinism tests the brief's own test-category list asked for. At the project
+level, goal 10 (membership alerts) and the entire frontend have not been started, per the brief's own
+stated priority: finishing fewer goals solidly over starting every goal partially. They're next, in
+that order, matching the brief's numbering.

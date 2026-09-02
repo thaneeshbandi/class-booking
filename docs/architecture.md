@@ -1,9 +1,9 @@
 # Architecture
 
-This describes the system as it actually stands after goals 1–7: accounts and roles, classes,
+This describes the system as it actually stands after goals 1–8: accounts and roles, classes,
 sessions, the booking lifecycle, co-instructors, server-side booking search/filter/sort/pagination,
-and recurring session generation with attendance CSV export. Goals 8 and 10 (the dashboard and
-membership alerts) and the frontend are not built yet — see "What was deliberately not built" below.
+recurring session generation with attendance CSV export, and the staff-only dashboard. Goal 10
+(membership alerts) and the frontend are not built yet — see "What was deliberately not built" below.
 
 ## Moving pieces
 
@@ -211,13 +211,93 @@ for auditability, not as a second source of current status, and all five final s
 is a five-line hand-written function (`domain/csv.js`) rather than a dependency, per the brief's own
 guidance not to add a library for a serializer this small.
 
+## Goal 8 — the dashboard
+
+`GET /api/dashboard`, staff-only, one route (`routes/dashboard.js`) backed by seven independent
+aggregate queries (`domain/dashboard.js`), run concurrently with `Promise.all` against the connection
+pool and composed into one stable, named-field JSON response. Nothing here fetches a booking or
+session row into JavaScript to count or group it — every count, group-by, and the eight-week series
+is computed inside PostgreSQL.
+
+**Staff-only, not instructor-scoped.** Every metric this endpoint reports — sessions today, bookings
+made today, no-shows this week, members waitlisted, the status/class breakdowns, the attendance chart
+— is a studio-wide aggregate with no session/class/room predicate in it anywhere. The brief describes
+an instructor's own view as "every session where they are the primary instructor or a co-instructor"
+(goal 5), a fundamentally different and narrower shape than "sessions today across every room"; it
+never asks for an instructor-facing dashboard at all. Exposing any of this to instructors would be
+inventing a capability the brief doesn't require, and would leak studio-wide operational data the same
+way an unscoped `GET /api/members` would — so this endpoint is `requireRole('staff')`, full stop, the
+same deny-by-default posture as the members list. See `docs/decisions.md`.
+
+**Two metrics are keyed by different columns on purpose, and neither was changed once decided.**
+"Bookings made today" is keyed by `bookings.created_at` — the index comment on `bookings_created_at`
+(`008_bookings.js`) already named this as the goal-8 use case for that index, back when the table was
+first migrated. "No-shows this week" is keyed by `sessions.starts_at`, not by when the booking was
+created or settled: a no-show is an attribute of the session that happened, and settling a booking
+`no_show` today for a session that ran three weeks ago must not make it appear in *this* week's count.
+`tests/dashboard.test.js` pins this distinction directly — a booking created ten weeks before its
+session, settled `no_show`, still counts in the week its session actually fell in.
+
+**Every time-window predicate is a sargable range against the raw column, not an expression wrapped
+around it.** The tempting first draft — `(sessions.starts_at AT TIME ZONE tz)::date = today` — wraps
+the indexed column itself in an expression, which a plain B-tree index on `starts_at` can't be used
+for. The actual queries instead compute the window boundary once as a real instant —
+`date_trunc('day', now() AT TIME ZONE tz) AT TIME ZONE tz` — and compare the untouched column against
+it with `>=`/`<`, exactly the same "local civil boundary, as a real instant" idiom recurring-session
+generation and `lockSessionForBooking`'s `studioToday` boolean already use, just built from
+`date_trunc` instead of a literal local-time string. `now()`/`date_trunc`/`AT TIME ZONE` are STABLE or
+IMMUTABLE, so Postgres evaluates the boundary once per query, not once per row.
+
+**"This week" is the ISO 8601 week** — `date_trunc('week', ...)`'s own definition, Monday 00:00
+through the following Monday 00:00, studio-local — because Postgres already has one unambiguous,
+built-in definition of a week and reaching for it is simpler than inventing a second one.
+
+**The eight-week attendance chart always returns exactly eight weeks, oldest first, ending with the
+current (possibly still in-progress) week — including weeks with zero attended bookings.**
+`generate_series` produces the eight week-start rows regardless of what data exists, and two
+`LEFT JOIN`s (session, then attended bookings for that session) are what turns an empty week into
+`count: 0` rather than a missing row. "Attendance" is counted as `status = 'attended'` specifically —
+the exact enum value the brief's own goal-4 settlement vocabulary already uses — not total bookings or
+occupancy, which would answer a different question than "how many people showed up."
+
+**Bookings-by-status always returns all five statuses; bookings-by-class only returns classes that
+have at least one booking.** The status set is small and fixed (`BOOKING_STATUSES`, reused from
+`routes/bookings.js` rather than re-declared), so every key is always present with `0` rather than
+being silently absent. The class list is neither small nor fixed, so a class that has never been
+booked — including one just created, or an archived one nobody ever scheduled a session for — simply
+doesn't appear, the same way an empty bar wouldn't be drawn on a real chart; `tests/dashboard.test.js`
+checks both directions explicitly.
+
+**Testing a studio-wide aggregate endpoint needed a different strategy than every other suite in this
+project.** Every other test file scopes its assertions to a session/class/booking id it just created,
+so leftover permanent fixtures from earlier runs (unavoidable once a fixture carries a real booking —
+see `bookings.test.js`) never affect what's being asserted. A dashboard metric has no id to scope
+to — it counts *everything* — so `tests/dashboard.test.js` asserts deltas (dashboard before, insert one
+precisely-controlled fixture row, dashboard after, assert the metric moved by exactly the expected
+amount) instead of absolute values, which stays correct regardless of how much of today's or this
+week's data every other suite has already left behind, and regardless of how many times the file
+itself is re-run.
+
 ## What was deliberately not built, and why
 
 - **A frontend.** The brief scores ten server-enforced goals; every hour spent on a UI before the
   server-side rules were all correct and tested would have been an hour not spent proving the thing
   the assignment is actually assessing. It comes after the server-side goals land cleanly.
-- **Goals 8 and 10** (the dashboard, membership alerts) — not started. Per the brief's own priority
-  order, they come after recurring schedule generation and CSV export (goal 7), now done and tested.
+- **Goal 10** (membership alerts) — not started. Per the brief's own priority order, it comes after
+  the dashboard (goal 8), now done and tested.
+- **An instructor-facing dashboard.** See the goal 8 section above — nothing in the brief asks for
+  one, and every metric this endpoint reports is studio-wide, not scoped to what one instructor
+  teaches.
+- **A single mega-query (CTEs stitching all seven metrics together) instead of seven small ones.**
+  Considered and rejected: a single query touching `sessions`, `bookings`, `classes`, and a
+  `generate_series` all at once would be one round trip instead of seven, but at this endpoint's
+  actual scale (a handful of small, well-indexed tables, one dashboard load, not a hot path) the
+  round-trip cost is not the bottleneck that would justify trading away seven individually readable,
+  individually testable queries for one that's harder to reason about — matching this project's
+  standing preference for simple, explainable architecture over unnecessary complexity.
+- **A new index for the dashboard's time-window queries.** `sessions_starts_at` and
+  `bookings_created_at` already exist and already serve these range predicates directly (see above);
+  nothing new was migrated in for this goal.
 - **A persistent recurrence-definition table for goal 7.** The brief asks for *generating* concrete
   sessions from a pattern, not for storing the pattern itself to re-run later; `POST
   /api/sessions/recurring`'s request body is the pattern, used once and discarded. Nothing downstream

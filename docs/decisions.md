@@ -170,3 +170,75 @@ backend/src/domain/sessionConflicts.js`), not invented for this file.
   escaping rule really is one `if`: quote a field only when it contains a comma, a double quote, or a
   line break, and double any embedded quote. A five-line function is easier to read, review, and
   trust than auditing a new dependency's API and defaults for this single call site.
+
+## Decision 13
+
+- **Chose:** `GET /api/dashboard` is staff-only (`requireRole('staff')`), with no instructor-facing
+  variant at all.
+- **Rejected:** An instructor-scoped dashboard (own-sessions-only headline numbers), or a dashboard
+  that returns different data depending on role.
+- **Why:** The brief never asks for an instructor-facing dashboard, and every metric it does ask for —
+  sessions today, bookings made today, no-shows this week, members waitlisted, the status/class
+  breakdowns, the attendance chart — is a studio-wide aggregate with no session/class/room predicate
+  in it anywhere; there is no natural way to "scope" a count of every member currently waitlisted to
+  one instructor's sessions without inventing a metric the brief never described. Building an
+  instructor-scoped version would mean inventing capability, and exposing the studio-wide version to
+  instructors would leak exactly the kind of studio-wide operational data `GET /api/members` already
+  restricts to staff for the same reason.
+
+## Decision 14
+
+- **Chose:** "No-shows this week" is keyed by the *session's* scheduled instant
+  (`sessions.starts_at`), not by when the booking was created or settled to `no_show`.
+- **Rejected:** Keying it by `bookings.updated_at` (when the status last changed) or
+  `bookings.created_at` (matching "bookings made today"'s own basis, for consistency).
+- **Why:** A no-show is an attribute of the session that happened — the class ran, and someone who
+  was booked didn't show up — not an attribute of when staff got around to recording it. Settlement
+  can legitimately happen any time after a session finishes; keying this count by settlement time
+  would make a session from three weeks ago appear in *this* week's no-show count just because staff
+  marked it late, which misrepresents what "this week" is supposed to describe. `bookings.created_at`
+  fares no better — a booking made weeks before its session ran has nothing to do with which week the
+  no-show actually happened in. `tests/dashboard.test.js` pins this directly with a booking created
+  ten weeks before a this-week session it belongs to.
+
+## Decision 15
+
+- **Chose:** "Members currently waitlisted" counts distinct members (`COUNT(DISTINCT member_id)`), not
+  waitlisted bookings.
+- **Rejected:** A plain `COUNT(*)` of waitlisted bookings.
+- **Why:** The brief's own wording is "members currently waitlisted", not "waitlist entries" — and the
+  two genuinely differ: nothing stops one member from being waitlisted on two different sessions at
+  once (the partial unique index only prevents two *active* bookings for the *same* session), and a
+  studio-wide headline number is more useful answering "how many people are waiting on something"
+  than "how many waitlist rows exist". `tests/dashboard.test.js` checks this explicitly: the same
+  member waitlisted on two sessions moves the count by one, not two.
+
+## Decision 16
+
+- **Chose:** Every dashboard time-window predicate is a sargable range against the raw indexed column
+  — `starts_at >= windowStart AND starts_at < windowStart + interval` — with the boundary computed
+  once as `date_trunc('day'|'week', now() AT TIME ZONE tz) AT TIME ZONE tz`.
+- **Rejected:** Wrapping the column itself in an expression and comparing for equality —
+  `(starts_at AT TIME ZONE tz)::date = today`.
+- **Why:** The wrapped-column form reads slightly more directly ("this row's local date equals
+  today"), but it makes the existing `sessions_starts_at`/`bookings_created_at` indexes unusable for
+  the comparison, since a B-tree index on a plain column can't be used to satisfy a predicate on an
+  expression built from that column. The range form compares the untouched column directly, so the
+  existing indexes still apply, and it's the same "local civil boundary, computed once as a real
+  instant" idiom recurring-session generation and `lockSessionForBooking`'s `studioToday` already use
+  — reused, not reinvented, for a third time.
+
+## Decision 17
+
+- **Chose:** `bookingsByStatus` always includes all five statuses (zero for one with no bookings);
+  `bookingsByClass` only includes classes with at least one booking (nothing for a class with zero,
+  including a brand-new or archived one).
+- **Rejected:** Treating both the same way — either padding `bookingsByClass` with every class at
+  zero, or letting `bookingsByStatus` silently omit a status with no bookings.
+- **Why:** The two breakdowns aren't symmetric. `booking_status` is a small, fixed enum known at
+  compile time — always returning all five, deterministically, is what makes "no bookings of that
+  status yet" render as a zero-height bar instead of a gap a client has to specially handle. The class
+  list is neither small nor fixed, and padding it with every class that has ever existed (including
+  ones archived years ago and never scheduled) would turn a chart of what's actually happening into a
+  chart mostly full of zeros — the less defensible reading of "breaks bookings down by class" for an
+  operational landing view.

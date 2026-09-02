@@ -132,7 +132,11 @@ const BOOKING_SORT_COLUMNS = {
   status: 'bookings.status',
   session: 'sessions.starts_at',
 };
-const BOOKING_STATUSES = ['booked', 'waitlisted', 'cancelled', 'attended', 'no_show'];
+// Exported for goal 8's dashboard, which needs the same fixed status set to
+// build a deterministic bookings-by-status breakdown (every status present,
+// zero rather than missing when a status has no bookings) — reused rather
+// than re-declared so the two can never quietly drift apart.
+export const BOOKING_STATUSES = ['booked', 'waitlisted', 'cancelled', 'attended', 'no_show'];
 const DEFAULT_PAGE_SIZE = 20;
 const MAX_PAGE_SIZE = 100;
 

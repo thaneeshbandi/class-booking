@@ -841,6 +841,20 @@ describe('DELETE /api/sessions/:id', () => {
     // booking, not scheduling, and a directly-inserted row can never collide
     // with a leftover permanent fixture from an earlier run of this same
     // test the way a `Date.now()`-relative, conflict-checked one could.
+    //
+    // That reasoning covers this test's own row never rejecting itself, but
+    // not the reverse: this fixture uses `fixture.instructorA`, and every
+    // repeated run leaves one more permanent session behind at nearly the
+    // same `at(602)` instant (`WINDOW_START` only drifts by the real-world
+    // gap between runs). Running the full suite many times in one sitting —
+    // exactly what this project's own verification protocol requires —
+    // eventually leaves enough of these leftover instructor-conflicting
+    // rows clustered close enough to `at(600)` (the unrelated "no bookings"
+    // delete test two hours away, which *is* conflict-checked) that it
+    // starts failing with a spurious 409. A randomized offset, spread wide
+    // for the same reason `p6Base` below is, keeps this fixture's permanent
+    // footprint from ever drifting back into another test's slot.
+    const scatteredOffsetHours = 602 + Math.floor(Math.random() * 20_000);
     const classRes = await server.request({
       method: 'POST',
       path: '/api/classes',
@@ -861,7 +875,7 @@ describe('DELETE /api/sessions/:id', () => {
         class_id: classRes.json.class.id,
         primary_instructor_id: fixture.instructorA.id,
         room_id: room.id,
-        starts_at: at(602).toISOString(),
+        starts_at: at(scatteredOffsetHours).toISOString(),
         duration_minutes: 30,
         capacity: 4,
       })

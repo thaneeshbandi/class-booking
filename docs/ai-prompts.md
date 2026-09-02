@@ -214,3 +214,72 @@ code afterward:
    timestamp this API already returns; a regression test asserting every "Booked At" cell matches ISO
    8601 UTC was added to `attendanceCsv.test.js`, and the fix was re-verified against the real running
    server before being folded into the full-suite verification.
+
+## Implementing the dashboard (goal 8)
+
+### Prompt
+
+One long, specific instruction given at the start of this session. In substance: read `README.md`,
+`CLAUDE.md`, every `docs/*.md` file, `SUBMISSION.md`, the entire backend implementation and test suite,
+and the git history first; implement `GET /api/dashboard` computing every metric server-side in SQL,
+never by downloading rows and aggregating in JavaScript; map each metric to its source table, time
+basis, authorization rule, SQL aggregation, and edge cases before writing code; preserve two named
+semantics exactly — "bookings made today" keyed by `bookings.created_at`, "no-shows this week" keyed by
+`sessions.starts_at` — as already-established project decisions, not to be silently changed; determine
+and document whether the dashboard is staff-only, instructor-scoped, or role-varying, using the
+existing authorization helpers rather than a parallel mechanism; keep all time math in
+`STUDIO_TIMEZONE`, explicit about inclusive/exclusive boundaries, and test them; use a small number of
+efficient aggregate queries with no N+1 queries, no new ORM abstraction, no Postgres extension, no
+materialized view, no cached counter, no background job, no cron; explicitly inspect whether the
+existing test-cleanup strategy (permanent booking-carrying fixtures) makes dashboard tests sensitive to
+leftover data, and avoid flaky small relative-date windows; write focused integration tests covering
+ten listed categories including exact time boundaries and empty/zero-value correctness; fix any real
+application bug a test or smoke test surfaces, with a regression test, before proceeding; run the full
+verification sequence (targeted tests, full suite twice, lint, a fresh `db:reset` and the suite again,
+a real running-server smoke test); update the same five `docs/`-plus-`SUBMISSION.md` files only after
+verification succeeded; commit as one incremental commit; and close by requiring explicit confirmation
+that goals 9/10 and the frontend were not started.
+
+### What was produced
+
+`domain/dashboard.js` (seven independent aggregate query functions — four scalar headline counts, a
+fixed-key status breakdown, a class breakdown, and a `generate_series`-based eight-week attendance
+series) and `routes/dashboard.js` (one staff-only route composing them with `Promise.all`);
+`BOOKING_STATUSES` exported from `routes/bookings.js` instead of re-declared, so the dashboard's status
+breakdown and the booking search endpoint's status filter can never quietly define the status set
+differently; `tests/dashboard.test.js` (26 tests, delta-based throughout — see "What was correct"
+below); and this round of documentation, including five new genuine decisions in `docs/decisions.md`
+(staff-only scope, the no-shows-this-week time basis, distinct-member waitlist counting, sargable range
+predicates over wrapped-expression equality, and the status/class breakdown asymmetry).
+
+### What was correct
+
+Reading the migrations before writing any query paid off directly: `008_bookings.js`'s
+`bookings_created_at` index comment and `006_sessions.js`'s `sessions_starts_at` index comment both
+already named their goal-8 use case ("bookings made today", "Dashboard day/week windows") at the time
+those tables were first migrated, confirming the semantics given in the prompt rather than requiring a
+fresh guess. The seven SQL queries themselves — including the `generate_series`/double-`LEFT JOIN`
+eight-week bucketing and the four-times-repeated `date_trunc(...) AT TIME ZONE tz` boundary idiom —
+were smoke-tested directly against the real seeded database with a throwaway script before any route or
+test was written, and worked correctly on the first pass; every one of the 26 new tests in
+`tests/dashboard.test.js` passed on its first complete run.
+
+### What was wrong, and what was corrected
+
+One issue, a pre-existing bug in the test suite rather than in the dashboard feature itself, caught by
+the second full-suite run (not by any dashboard test): `sessions.test.js`'s "rejects deleting a session
+that has bookings" test (the "Undeletable Session Fixture") schedules its permanently-undeletable
+session at a fixed offset (`at(602)`) from a `WINDOW_START` that is *not* randomized
+(`Date.now() + 60 days`, recomputed fresh but barely shifting between runs made minutes apart). Because
+that session is never deleted by design, every `npm test` run across this project's several milestones
+today left one more leftover instance behind at nearly the same instant, all using the same shared
+seeded instructor; by this session's several verification runs, enough had accumulated within about
+two hours of a *different*, unrelated, conflict-checked test (`at(600)`, "lets staff delete a session
+with no bookings") that the two started colliding via an ordinary instructor-scheduling conflict — a
+409 the second test was never expecting, unrelated to anything it was actually testing. Root-caused by
+reading the file's own `p6Base` section, which documents exactly this failure mode and already fixes it
+the same way for its own fixtures — the "Undeletable Session Fixture" test predates that fix and was
+never brought in line with it. Corrected by giving it the same wide-randomized-offset treatment
+(`602 + Math.floor(Math.random() * 20_000)` hours), then a fresh `db:reset` to clear the leftover
+instances that had already accumulated, and three consecutive clean full-suite runs before continuing —
+one more than the required two, given this exact class of bug had just been found.
