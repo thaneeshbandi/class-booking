@@ -23,7 +23,7 @@ request can take up to a minute.>
 
 | Layer | What you used | Why |
 |-------|---------------|-----|
-| Frontend | React 18 + Vite, plain JavaScript, hand-written CSS (no component library, no TypeScript) | See `docs/architecture.md` — deliberately deferred until the server-side goals it depends on were done, tested, and audited |
+| Frontend | React 18 + Vite, plain JavaScript, hand-written CSS (no component library, no TypeScript) | Built after every server-side goal was done, tested, and audited — see `docs/architecture.md` |
 | Backend | Node.js, Express, Knex (query builder + migrations) over `pg` | See `docs/decisions.md` |
 | Database | PostgreSQL 17 (Docker locally; not yet deployed) | See `docs/schema.md` |
 | Hosting | Not deployed yet | Frontend and backend are both complete; deployment itself hasn't happened yet |
@@ -44,6 +44,29 @@ Mark each honestly. Partial is fine — say what is partial.
 | 8 | Dashboard | Done | `GET /api/dashboard` (staff-only) — sessions today, bookings made today, no-shows this week, members currently waitlisted, a bookings-by-status and bookings-by-class breakdown, and an eight-week attendance chart, all computed as SQL aggregates; see `docs/architecture.md` and `docs/decisions.md` |
 | 9 | Immutable booking history | Done | Delivered as part of goal 4 — append-only `booking_events`, enforced by trigger and (optionally) revoked grants |
 | 10 | Expiring membership alerts | Done | `GET /api/members/alerts/expiring` and `POST /api/members/:memberId/alerts/membership-expiry/dismiss` (staff-only) — expiry `<= studio-local today + 7 days`, a dismissal keyed to the exact expiry date it was dismissed at (`member_alert_dismissals`, unchanged from the original schema design), so a later expiry change automatically brings the alert back; see `docs/architecture.md` and `docs/decisions.md` |
+
+All ten mandatory goals above are complete, and a frontend covering every one of them is built (see the
+Stack table). None of the optional stretch ideas listed in `README.md` have been started — per
+`CLAUDE.md`'s own rule, they were never going to be attempted before all ten mandatory goals were done.
+
+## Verification
+
+What was actually run, most recently: backend `npm test --test-concurrency=1` — 391 tests, 390 passing,
+1 skipped (an `APP_DB_ROLE`-gated schema test, skipped whenever that optional role isn't configured,
+same as every earlier run) — run twice, then again after a fresh `npm run db:reset`; `npm run lint`
+clean on both `backend/` and `frontend/`; `npm run build` clean on `frontend/`. Full detail, including
+every session's exact commands and results, is in `docs/plan.md`.
+
+**A real, disclosed limitation:** end-to-end frontend verification was done by simulating the browser's
+exact request flow with `curl` (cookies, `Origin` header, identical request bodies to what the frontend
+code actually sends) against the real running backend, not by interactive browser testing — no browser
+automation tool was available in the sessions that built or audited the frontend. This did catch one
+real bug a `curl`-only check could not have (a cross-origin header-exposure issue affecting the
+attendance CSV's downloaded filename — see `docs/decisions.md`, Decision 23), found by reasoning through
+the browser CORS specification directly rather than by a tool observing the failure. What this
+verification approach has *not* done is drive an actual browser through the UI, so purely visual/layout
+issues or a bug that only manifests through real click-and-type interaction could still exist
+undiscovered.
 
 ## How much time did you actually spend?
 
