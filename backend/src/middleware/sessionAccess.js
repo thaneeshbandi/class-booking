@@ -40,6 +40,42 @@ function isPositiveIntegerString(value) {
  * accounts are a small set of studio employees, not the general public, so
  * distinguishing the two is not treated as a resource-existence leak here.
  */
+/**
+ * The booking-level counterpart to `loadAuthorizedSession`: loads the booking
+ * named by `bookingId`, then authorizes it through the booking's own
+ * `session_id` — read from the database, never from a client-supplied
+ * session id — using the exact same `scopeSessionsToInstructor` predicate a
+ * session-level check would use. Booking and session ownership can therefore
+ * never drift into two different definitions of "this instructor's own".
+ *
+ * `queryable` is either the shared `db` (a plain authorized read, e.g. GET)
+ * or an open transaction (a re-check against a session row already locked
+ * `FOR UPDATE`, e.g. settle) — the caller decides which guarantee it needs.
+ *
+ * Returns `{ error: 404 }`, `{ error: 403 }`, or `{ booking }`. A route
+ * translates the `error` into a response; this never touches `req`/`res`
+ * itself, so it is equally usable inside a transaction where there is no
+ * response to short-circuit yet.
+ */
+export async function loadAuthorizedBooking(queryable, bookingId, user) {
+  const booking = await queryable('bookings').where({ id: bookingId }).first();
+  if (!booking) {
+    return { error: 404 };
+  }
+
+  if (user.role !== 'staff') {
+    const authorized = await queryable('sessions')
+      .where({ id: booking.session_id })
+      .modify(scopeSessionsToInstructor, user.id)
+      .first();
+    if (!authorized) {
+      return { error: 403 };
+    }
+  }
+
+  return { booking };
+}
+
 export function loadAuthorizedSession(paramName = 'sessionId') {
   return async (req, res, next) => {
     try {
