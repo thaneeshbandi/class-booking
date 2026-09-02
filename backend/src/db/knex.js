@@ -1,5 +1,6 @@
 import knexFactory from 'knex';
 
+import './pgTypes.js';
 import config from '../../knexfile.js';
 
 /**
