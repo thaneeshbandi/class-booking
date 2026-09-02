@@ -2,6 +2,11 @@ import { Router } from 'express';
 import { z } from 'zod';
 
 import {
+  countOccupiedSeats,
+  countSettledBookings,
+  promoteWaitlistFIFO,
+} from '../domain/bookingTransaction.js';
+import {
   computeEndsAt,
   findSchedulingConflicts,
 } from '../domain/sessionConflicts.js';
@@ -251,35 +256,72 @@ router.patch('/:sessionId', requireRole('staff'), async (req, res, next) => {
       return res.status(400).json(zodErrorResponse(parsed.error));
     }
 
-    const existing = await db('sessions').where({ id: idResult.data }).first();
-    if (!existing) return res.status(404).json({ error: 'Session not found.' });
-
-    if (parsed.data.roomId !== undefined) {
-      const room = await findRoom(db, parsed.data.roomId);
-      if (!room) return res.status(400).json({ error: 'Invalid room id.' });
-    }
-    if (parsed.data.primaryInstructorId !== undefined) {
-      const instructor = await findActiveInstructor(
-        db,
-        parsed.data.primaryInstructorId,
-      );
-      if (!instructor) {
-        return res.status(400).json({
-          error:
-            'Invalid primary instructor id: must be an active instructor.',
-        });
-      }
-    }
-
-    const roomId = parsed.data.roomId ?? existing.room_id;
-    const primaryInstructorId =
-      parsed.data.primaryInstructorId ?? existing.primary_instructor_id;
-    const startsAt = parsed.data.startsAt ?? existing.starts_at;
-    const durationMinutes =
-      parsed.data.durationMinutes ?? existing.duration_minutes;
-    const capacity = parsed.data.capacity ?? existing.capacity;
-
+    // The session row is the mutex for this whole decision, exactly as for a
+    // booking mutation: everything below — the capacity floor, the settled-
+    // reschedule rule, the conflict check, and any resulting promotion — is
+    // read and decided against state re-read after acquiring this lock, never
+    // against a value read before it.
     const outcome = await db.transaction(async (trx) => {
+      const existing = await trx('sessions').where({ id: idResult.data }).forUpdate().first();
+      if (!existing) {
+        return { error: { status: 404, body: { error: 'Session not found.' } } };
+      }
+
+      if (parsed.data.roomId !== undefined) {
+        const room = await findRoom(trx, parsed.data.roomId);
+        if (!room) {
+          return { error: { status: 400, body: { error: 'Invalid room id.' } } };
+        }
+      }
+      if (parsed.data.primaryInstructorId !== undefined) {
+        const instructor = await findActiveInstructor(trx, parsed.data.primaryInstructorId);
+        if (!instructor) {
+          return {
+            error: {
+              status: 400,
+              body: { error: 'Invalid primary instructor id: must be an active instructor.' },
+            },
+          };
+        }
+      }
+
+      const roomId = parsed.data.roomId ?? existing.room_id;
+      const primaryInstructorId = parsed.data.primaryInstructorId ?? existing.primary_instructor_id;
+      const startsAt = parsed.data.startsAt ?? existing.starts_at;
+      const durationMinutes = parsed.data.durationMinutes ?? existing.duration_minutes;
+      const capacity = parsed.data.capacity ?? existing.capacity;
+
+      const occupied = await countOccupiedSeats(trx, existing.id);
+      if (capacity < occupied) {
+        return {
+          error: {
+            status: 409,
+            body: {
+              error: `Cannot set capacity below the ${occupied} seat(s) already occupied.`,
+            },
+          },
+        };
+      }
+
+      // Once a session has any attended/no_show booking, its time and
+      // duration are frozen — attendance was recorded against a specific
+      // real-world slot, and moving the slot afterward would falsify that
+      // record. Capacity, room and instructor remain changeable.
+      const settled = await countSettledBookings(trx, existing.id);
+      const startsAtChanged = new Date(startsAt).getTime() !== new Date(existing.starts_at).getTime();
+      const durationChanged = durationMinutes !== existing.duration_minutes;
+      if (settled > 0 && (startsAtChanged || durationChanged)) {
+        return {
+          error: {
+            status: 409,
+            body: {
+              error:
+                'Cannot change the start time or duration of a session that already has attended or no-show bookings.',
+            },
+          },
+        };
+      }
+
       // Goal 5: a session's primary instructor and every co-instructor are
       // all "instructors" for conflict purposes, and the primary invariant
       // (primary != any co-instructor) must hold before this update lands —
@@ -326,7 +368,21 @@ router.patch('/:sessionId', requireRole('staff'), async (req, res, next) => {
           updated_at: trx.fn.now(),
         })
         .returning('*');
-      return { session: updated };
+
+      // A capacity increase must not leave anyone idly waitlisted while a
+      // seat is free — promote in the same transaction, using the same FIFO
+      // helper a booked cancellation uses, with no triggering booking.
+      let promoted = [];
+      if (capacity > existing.capacity) {
+        promoted = await promoteWaitlistFIFO(trx, {
+          sessionId: existing.id,
+          freeSeats: capacity - occupied,
+          actorUserId: req.user.id,
+          causedByBookingId: null,
+        });
+      }
+
+      return { session: updated, promoted };
     });
 
     if (outcome.error) {
@@ -338,7 +394,24 @@ router.patch('/:sessionId', requireRole('staff'), async (req, res, next) => {
         conflicts: outcome.conflicts,
       });
     }
-    res.json({ session: serializeSession(outcome.session) });
+
+    const promotedBookings = outcome.promoted.length
+      ? await db('bookings')
+          .join('members', 'members.id', 'bookings.member_id')
+          .select(
+            'bookings.*',
+            'members.full_name as member_full_name',
+            'members.email as member_email',
+          )
+          .whereIn(
+            'bookings.id',
+            outcome.promoted.map((booking) => booking.id),
+          )
+      : [];
+    res.json({
+      session: serializeSession(outcome.session),
+      promoted: promotedBookings.map(serializeBooking),
+    });
   } catch (error) {
     next(error);
   }
@@ -356,19 +429,35 @@ router.delete('/:sessionId', requireRole('staff'), async (req, res, next) => {
       return res.status(400).json({ error: 'Invalid session id.' });
     }
 
-    const existing = await db('sessions').where({ id: idResult.data }).first();
-    if (!existing) return res.status(404).json({ error: 'Session not found.' });
+    // The existence check and the delete now share the session's own lock,
+    // closing the race where a booking is created concurrently, between an
+    // unlocked count and an unlocked delete, on a session about to be
+    // removed: a concurrent booking creation's own `lockSessionForBooking`
+    // blocks on this same row until this transaction ends, then either sees
+    // the session gone (404, cleanly) or sees the booking this check just
+    // counted.
+    const outcome = await db.transaction(async (trx) => {
+      const existing = await trx('sessions').where({ id: idResult.data }).forUpdate().first();
+      if (!existing) {
+        return { error: { status: 404, body: { error: 'Session not found.' } } };
+      }
 
-    const [{ count }] = await db('bookings')
-      .where({ session_id: idResult.data })
-      .count({ count: '*' });
-    if (Number(count) > 0) {
-      return res
-        .status(409)
-        .json({ error: 'Cannot delete a session that has bookings.' });
+      const [{ count }] = await trx('bookings')
+        .where({ session_id: idResult.data })
+        .count({ count: '*' });
+      if (Number(count) > 0) {
+        return {
+          error: { status: 409, body: { error: 'Cannot delete a session that has bookings.' } },
+        };
+      }
+
+      await trx('sessions').where({ id: idResult.data }).delete();
+      return {};
+    });
+
+    if (outcome.error) {
+      return res.status(outcome.error.status).json(outcome.error.body);
     }
-
-    await db('sessions').where({ id: idResult.data }).delete();
     res.status(204).end();
   } catch (error) {
     next(error);

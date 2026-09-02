@@ -534,6 +534,281 @@ describe('PATCH /api/sessions/:id', () => {
     });
     assert.equal(res.status, 403);
   });
+
+  describe('booking-aware capacity and reschedule rules (goal 4, phase P6)', () => {
+    // Every session below gets a real booking attached, which makes it
+    // permanently undeletable (bookings.session_id is ON DELETE RESTRICT and
+    // booking_events is append-only) — so, unlike the rest of this file,
+    // these sessions must NOT be pushed onto the shared `createdSessionIds`
+    // array: a single undeletable id in that array would fail the shared
+    // bulk `after()` delete for every other test's cleanup too, and in turn
+    // block deleting `fixture.class`/`fixture.roomA` themselves (a session
+    // referencing them is enough, booking or not). A dedicated, uniquely
+    // named, never-cleaned-up class and room — the same pattern
+    // `sessions.test.js`'s own "Undeletable Session Fixture" test already
+    // uses — keeps this describe block's permanent footprint isolated from
+    // the rest of the suite.
+    let bookingAwareClassId;
+    let bookingAwareRoomId;
+
+    // These sessions are permanent (see above), and all use the shared
+    // `fixture.instructorA` — so, unlike the rest of this file's fixed
+    // `at(N)` offsets (safe because their sessions ARE cleaned up), a fixed
+    // offset here would collide with the *previous* run's leftover session
+    // for the same instructor at nearly the same instant (`WINDOW_START`
+    // drifts only by the wall-clock gap between runs). A randomized base,
+    // spread wide, keeps repeated runs from ever landing on the same slot.
+    const p6Base = 1000 + Math.floor(Math.random() * 20_000);
+
+    before(async () => {
+      const [room] = await db('rooms')
+        .insert({ name: `Booking-Aware PATCH Test Room ${Date.now()}` })
+        .returning('*');
+      bookingAwareRoomId = room.id;
+      const cookie = await loginAs(fixture.staff);
+      const classRes = await server.request({
+        method: 'POST',
+        path: '/api/classes',
+        cookie,
+        body: {
+          title: `Booking-Aware PATCH Test Class ${Date.now()}`,
+          discipline: 'Testing',
+          defaultDurationMinutes: 60,
+          defaultCapacity: 5,
+        },
+      });
+      assert.equal(classRes.status, 201, classRes.raw);
+      bookingAwareClassId = classRes.json.class.id;
+    });
+
+    function createBookingAwareSession(cookie, overrides = {}) {
+      return createSession(cookie, {
+        classId: bookingAwareClassId,
+        roomId: bookingAwareRoomId,
+        ...overrides,
+      });
+    }
+
+    async function createPatchTestMember() {
+      const [member] = await db('members')
+        .insert({
+          full_name: 'Session Patch Test Member',
+          email: `session-patch-test-member-${Date.now()}-${Math.random().toString(36).slice(2)}@example.com`,
+          membership_expires_on: '2099-01-01',
+        })
+        .returning('*');
+      return member;
+    }
+
+    async function bookMember(cookie, sessionId, memberId) {
+      const res = await server.request({
+        method: 'POST',
+        path: '/api/bookings',
+        cookie,
+        body: { sessionId: String(sessionId), memberId: String(memberId) },
+      });
+      assert.equal(res.status, 201, res.raw);
+      return res.json.booking;
+    }
+
+    it('rejects lowering capacity below the number of occupied seats', async () => {
+      const cookie = await loginAs(fixture.staff);
+      const created = await createBookingAwareSession(cookie, { startsAt: at(p6Base + 700).toISOString(), capacity: 2 });
+      const [m1, m2] = await Promise.all([createPatchTestMember(), createPatchTestMember()]);
+      await bookMember(cookie, created.json.session.id, m1.id);
+      await bookMember(cookie, created.json.session.id, m2.id);
+
+      const res = await server.request({
+        method: 'PATCH',
+        path: `/api/sessions/${created.json.session.id}`,
+        cookie,
+        body: { capacity: 1 },
+      });
+      assert.equal(res.status, 409, res.raw);
+    });
+
+    it('allows lowering capacity to exactly the number occupied', async () => {
+      const cookie = await loginAs(fixture.staff);
+      const created = await createBookingAwareSession(cookie, { startsAt: at(p6Base + 702).toISOString(), capacity: 3 });
+      const member = await createPatchTestMember();
+      await bookMember(cookie, created.json.session.id, member.id);
+
+      const res = await server.request({
+        method: 'PATCH',
+        path: `/api/sessions/${created.json.session.id}`,
+        cookie,
+        body: { capacity: 1 },
+      });
+      assert.equal(res.status, 200, res.raw);
+      assert.equal(res.json.session.capacity, 1);
+    });
+
+    it('promotes FIFO-waitlisted bookings when capacity is increased, with caused_by_booking_id null', async () => {
+      const cookie = await loginAs(fixture.staff);
+      const created = await createBookingAwareSession(cookie, { startsAt: at(p6Base + 704).toISOString(), capacity: 1 });
+      const [holder, first, second] = await Promise.all([
+        createPatchTestMember(),
+        createPatchTestMember(),
+        createPatchTestMember(),
+      ]);
+      await bookMember(cookie, created.json.session.id, holder.id);
+      const firstWaitlisted = await bookMember(cookie, created.json.session.id, first.id);
+      const secondWaitlisted = await bookMember(cookie, created.json.session.id, second.id);
+      assert.equal(firstWaitlisted.status, 'waitlisted');
+      assert.equal(secondWaitlisted.status, 'waitlisted');
+
+      const res = await server.request({
+        method: 'PATCH',
+        path: `/api/sessions/${created.json.session.id}`,
+        cookie,
+        body: { capacity: 2 },
+      });
+      assert.equal(res.status, 200, res.raw);
+      assert.equal(res.json.promoted.length, 1);
+      assert.equal(String(res.json.promoted[0].id), String(firstWaitlisted.id));
+
+      const stillWaiting = await db('bookings').where({ id: secondWaitlisted.id }).first();
+      assert.equal(stillWaiting.status, 'waitlisted');
+
+      const promotionEvent = await db('booking_events')
+        .where({ booking_id: firstWaitlisted.id, event_type: 'status_changed' })
+        .first();
+      assert.equal(promotionEvent.is_automatic, true);
+      assert.equal(promotionEvent.caused_by_booking_id, null);
+    });
+
+    it('rejects changing start time or duration once a session has a settled booking, but still allows capacity', async () => {
+      const cookie = await loginAs(fixture.staff);
+      const created = await createBookingAwareSession(cookie, { startsAt: at(p6Base + 706).toISOString(), capacity: 5 });
+      const member = await createPatchTestMember();
+      const booking = await bookMember(cookie, created.json.session.id, member.id);
+
+      // Relocate into the past — settlement requires a finished session —
+      // then settle, which is what the reschedule rule keys off. A
+      // randomized number of years in the past, not a fixed instant: the
+      // capacity-only PATCH below still re-runs the room/instructor conflict
+      // check against this instructor's *current* schedule, this session is
+      // permanent (see above), and a fixed instant would collide with the
+      // very same test's own leftover session from a previous run.
+      const randomPastHoursAgo = 10_000 + Math.floor(Math.random() * 500_000);
+      await db('sessions')
+        .where({ id: created.json.session.id })
+        .update({ starts_at: new Date(Date.now() - randomPastHoursAgo * 3_600_000) });
+      const settleRes = await server.request({
+        method: 'POST',
+        path: `/api/bookings/${booking.id}/settle`,
+        cookie,
+        body: { status: 'attended' },
+      });
+      assert.equal(settleRes.status, 200, settleRes.raw);
+
+      const rescheduleRes = await server.request({
+        method: 'PATCH',
+        path: `/api/sessions/${created.json.session.id}`,
+        cookie,
+        body: { startsAt: new Date(Date.now() + 3_600_000).toISOString() },
+      });
+      assert.equal(rescheduleRes.status, 409, rescheduleRes.raw);
+
+      const durationRes = await server.request({
+        method: 'PATCH',
+        path: `/api/sessions/${created.json.session.id}`,
+        cookie,
+        body: { durationMinutes: 90 },
+      });
+      assert.equal(durationRes.status, 409, durationRes.raw);
+
+      const capacityRes = await server.request({
+        method: 'PATCH',
+        path: `/api/sessions/${created.json.session.id}`,
+        cookie,
+        body: { capacity: 10 },
+      });
+      assert.equal(capacityRes.status, 200, capacityRes.raw);
+    });
+
+    it('holds I1/I2 under a concurrent capacity increase and a new booking create, regardless of interleaving', async () => {
+      const cookie = await loginAs(fixture.staff);
+      const created = await createBookingAwareSession(cookie, { startsAt: at(p6Base + 710).toISOString(), capacity: 1 });
+      const [holder, waiter, newcomer] = await Promise.all([
+        createPatchTestMember(),
+        createPatchTestMember(),
+        createPatchTestMember(),
+      ]);
+      await bookMember(cookie, created.json.session.id, holder.id);
+      const waitlisted = await bookMember(cookie, created.json.session.id, waiter.id);
+      assert.equal(waitlisted.status, 'waitlisted');
+
+      const [patchRes, createRes] = await Promise.all([
+        server.request({
+          method: 'PATCH',
+          path: `/api/sessions/${created.json.session.id}`,
+          cookie,
+          body: { capacity: 2 },
+        }),
+        server.request({
+          method: 'POST',
+          path: '/api/bookings',
+          cookie,
+          body: { sessionId: String(created.json.session.id), memberId: String(newcomer.id) },
+        }),
+      ]);
+      assert.equal(patchRes.status, 200, patchRes.raw);
+      assert.equal(createRes.status, 201, createRes.raw);
+
+      // `waiter` was waitlisted before either concurrent request began, so
+      // FIFO order guarantees it wins the freed seat under either possible
+      // interleaving of the capacity increase and the new create.
+      const rows = await db('bookings')
+        .where({ session_id: created.json.session.id })
+        .select('member_id', 'status');
+      const byMember = Object.fromEntries(rows.map((row) => [String(row.member_id), row.status]));
+      assert.equal(byMember[String(holder.id)], 'booked');
+      assert.equal(byMember[String(waiter.id)], 'booked');
+      assert.equal(byMember[String(newcomer.id)], 'waitlisted');
+
+      const occupied = rows.filter((row) => ['booked', 'attended', 'no_show'].includes(row.status)).length;
+      const sessionRow = await db('sessions').where({ id: created.json.session.id }).first();
+      assert.ok(occupied <= sessionRow.capacity, 'I1: occupied must never exceed capacity');
+    });
+
+    it('rejects a concurrent capacity decrease below occupancy regardless of interleaving with a new booking create (stale-read protection)', async () => {
+      const cookie = await loginAs(fixture.staff);
+      const created = await createBookingAwareSession(cookie, { startsAt: at(p6Base + 712).toISOString(), capacity: 2 });
+      const [h1, h2, newcomer] = await Promise.all([
+        createPatchTestMember(),
+        createPatchTestMember(),
+        createPatchTestMember(),
+      ]);
+      await bookMember(cookie, created.json.session.id, h1.id);
+      await bookMember(cookie, created.json.session.id, h2.id);
+
+      const [patchRes, createRes] = await Promise.all([
+        server.request({
+          method: 'PATCH',
+          path: `/api/sessions/${created.json.session.id}`,
+          cookie,
+          body: { capacity: 1 },
+        }),
+        server.request({
+          method: 'POST',
+          path: '/api/bookings',
+          cookie,
+          body: { sessionId: String(created.json.session.id), memberId: String(newcomer.id) },
+        }),
+      ]);
+      // The session lock serializes the two requests, so the decrease sees
+      // the true occupancy at the time it actually runs — never a value read
+      // before the other request's effects landed — and is rejected either
+      // way.
+      assert.equal(patchRes.status, 409, patchRes.raw);
+      assert.equal(createRes.status, 201, createRes.raw);
+      assert.equal(createRes.json.booking.status, 'waitlisted');
+
+      const sessionRow = await db('sessions').where({ id: created.json.session.id }).first();
+      assert.equal(sessionRow.capacity, 2, 'capacity must remain unchanged after the rejected decrease');
+    });
+  });
 });
 
 describe('DELETE /api/sessions/:id', () => {
@@ -648,5 +923,73 @@ describe('DELETE /api/sessions/:id', () => {
       cookie,
     });
     assert.equal(res.status, 404);
+  });
+
+  it('under a concurrent delete and a new booking create, exactly one succeeds and the database never ends up inconsistent', async () => {
+    // Its own throwaway class/room, same reasoning as the booking-aware
+    // PATCH describe block above: this session may end up permanently
+    // booking-carrying depending on how the race resolves, and must not
+    // poison the shared fixture cleanup either way.
+    const cookie = await loginAs(fixture.staff);
+    const [room] = await db('rooms')
+      .insert({ name: `Undeletable Session Race Room ${Date.now()}` })
+      .returning('*');
+    const classRes = await server.request({
+      method: 'POST',
+      path: '/api/classes',
+      cookie,
+      body: {
+        title: `Undeletable Session Race Class ${Date.now()}`,
+        discipline: 'Testing',
+        defaultDurationMinutes: 60,
+        defaultCapacity: 5,
+      },
+    });
+    assert.equal(classRes.status, 201, classRes.raw);
+
+    // A randomized offset, not a fixed one: this session may end up
+    // permanently booking-carrying (see below) and reuses the shared
+    // fixture.instructorA, so a fixed instant would risk colliding with a
+    // previous run's own leftover session the same way the booking-aware
+    // PATCH tests above do.
+    const created = await createSession(cookie, {
+      classId: classRes.json.class.id,
+      roomId: room.id,
+      startsAt: at(1000 + Math.floor(Math.random() * 20_000)).toISOString(),
+      capacity: 5,
+    });
+    assert.equal(created.status, 201, created.raw);
+    const [member] = await db('members')
+      .insert({
+        full_name: 'Session Delete Race Member',
+        email: `session-delete-race-${Date.now()}@example.com`,
+        membership_expires_on: '2099-01-01',
+      })
+      .returning('*');
+
+    const [deleteRes, createRes] = await Promise.all([
+      server.request({ method: 'DELETE', path: `/api/sessions/${created.json.session.id}`, cookie }),
+      server.request({
+        method: 'POST',
+        path: '/api/bookings',
+        cookie,
+        body: { sessionId: String(created.json.session.id), memberId: String(member.id) },
+      }),
+    ]);
+
+    if (deleteRes.status === 204) {
+      assert.equal(
+        createRes.status,
+        404,
+        'a booking cannot be created on a session that was concurrently deleted',
+      );
+      const row = await db('sessions').where({ id: created.json.session.id }).first();
+      assert.equal(row, undefined);
+    } else {
+      assert.equal(deleteRes.status, 409, deleteRes.raw);
+      assert.equal(createRes.status, 201, createRes.raw);
+      const row = await db('sessions').where({ id: created.json.session.id }).first();
+      assert.ok(row, 'the session must still exist since it now has a booking attached');
+    }
   });
 });
