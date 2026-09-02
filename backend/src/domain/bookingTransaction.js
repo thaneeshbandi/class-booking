@@ -1,3 +1,4 @@
+import { BookingError } from './bookingErrors.js';
 import { env } from '../config/env.js';
 
 /**
@@ -146,4 +147,38 @@ export async function promoteWaitlistFIFO(
     promoted.push(updated);
   }
   return promoted;
+}
+
+/**
+ * Maps a raw Postgres error from inside a booking/session transaction to a
+ * clean `BookingError`, or returns `null` for anything else — the caller
+ * rethrows the original in that case, so an unrecognized failure still
+ * surfaces as a 500 rather than being silently swallowed.
+ *
+ * `23505` (unique violation): the partial unique index on
+ * `(session_id, member_id)` is the database backstop behind the pre-check
+ * `POST /api/bookings` already does under the session lock; unreachable in
+ * practice given that lock, kept as a last line of defense per the approved
+ * design.
+ *
+ * `23503` (foreign key violation): every id this application inserts against
+ * a booking is validated to exist earlier in the same transaction, so this
+ * is likewise not expected to be reachable through normal use — but a raw
+ * FK violation must never reach a client as an unexplained 500.
+ *
+ * `55P03` (lock not available): only possible where `SET LOCAL lock_timeout`
+ * is in effect (see the booking and session-mutation transactions). A busy
+ * session row is a legitimate, retryable condition, not a server error.
+ */
+export function translateBookingPgError(error) {
+  if (error?.code === '23505') {
+    return new BookingError(409, 'This member already has an active booking for this session.');
+  }
+  if (error?.code === '23503') {
+    return new BookingError(409, 'This booking references a record that no longer exists.');
+  }
+  if (error?.code === '55P03') {
+    return new BookingError(409, 'This session is busy right now; please try again.');
+  }
+  return null;
 }

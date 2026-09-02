@@ -10,6 +10,7 @@ import {
   loadBookingForUpdate,
   lockSessionForBooking,
   promoteWaitlistFIFO,
+  translateBookingPgError,
   writeBookingEvent,
 } from '../domain/bookingTransaction.js';
 import { db } from '../db/knex.js';
@@ -87,20 +88,6 @@ async function fetchBookingsWithMember(bookingIds) {
   return bookingIds.map((id) => byId.get(String(id)));
 }
 
-/** Maps a Postgres duplicate-active-booking race to a clean 409. Under the
- * session lock this should be unreachable — the pre-check below already
- * catches it deterministically — but the partial unique index remains the
- * database backstop, and a raw 23505 must never reach the client. */
-function translateDuplicateBookingError(error) {
-  if (error?.code === '23505') {
-    return new BookingError(
-      409,
-      'This member already has an active booking for this session.',
-    );
-  }
-  return null;
-}
-
 router.get('/', authenticate, async (req, res, next) => {
   try {
     // Joins `sessions` itself (unlike `bookingWithMemberQuery`, used
@@ -146,60 +133,60 @@ router.post('/', authenticate, requireRole('staff'), async (req, res, next) => {
     }
     const { sessionId, memberId } = parsed.data;
 
-    let bookingId;
-    try {
-      bookingId = await db.transaction(async (trx) => {
-        const session = await lockSessionForBooking(trx, sessionId);
-        if (!session) {
-          throw new BookingError(404, 'Session not found.');
-        }
-        assertCanCreate({ hasStarted: session.hasStarted });
+    const bookingId = await db.transaction(async (trx) => {
+      await trx.raw("SET LOCAL lock_timeout = '3s'");
+      const session = await lockSessionForBooking(trx, sessionId);
+      if (!session) {
+        throw new BookingError(404, 'Session not found.');
+      }
+      assertCanCreate({ hasStarted: session.hasStarted });
 
-        const member = await trx('members').where({ id: memberId }).first();
-        if (!member) {
-          throw new BookingError(400, 'Unknown member id.');
-        }
-        if (isMembershipExpired(member.membership_expires_on, session.studioToday)) {
-          throw new BookingError(
-            409,
-            `This member's membership expired on ${member.membership_expires_on}.`,
-          );
-        }
+      const member = await trx('members').where({ id: memberId }).first();
+      if (!member) {
+        throw new BookingError(400, 'Unknown member id.');
+      }
+      if (isMembershipExpired(member.membership_expires_on, session.studioToday)) {
+        throw new BookingError(
+          409,
+          `This member's membership expired on ${member.membership_expires_on}.`,
+        );
+      }
 
-        const existingActive = await trx('bookings')
-          .where({ session_id: sessionId, member_id: memberId })
-          .whereIn('status', ['booked', 'waitlisted'])
-          .first();
-        if (existingActive) {
-          throw new BookingError(
-            409,
-            'This member already has an active booking for this session.',
-          );
-        }
+      const existingActive = await trx('bookings')
+        .where({ session_id: sessionId, member_id: memberId })
+        .whereIn('status', ['booked', 'waitlisted'])
+        .first();
+      if (existingActive) {
+        throw new BookingError(
+          409,
+          'This member already has an active booking for this session.',
+        );
+      }
 
-        const occupied = await countOccupiedSeats(trx, sessionId);
-        const status = occupied < session.capacity ? 'booked' : 'waitlisted';
+      const occupied = await countOccupiedSeats(trx, sessionId);
+      const status = occupied < session.capacity ? 'booked' : 'waitlisted';
 
-        const [booking] = await trx('bookings')
-          .insert({ session_id: sessionId, member_id: memberId, status })
-          .returning('id');
-        await writeBookingEvent(trx, {
-          bookingId: booking.id,
-          eventType: 'created',
-          toStatus: status,
-          actorUserId: req.user.id,
-        });
-        return booking.id;
+      const [booking] = await trx('bookings')
+        .insert({ session_id: sessionId, member_id: memberId, status })
+        .returning('id');
+      await writeBookingEvent(trx, {
+        bookingId: booking.id,
+        eventType: 'created',
+        toStatus: status,
+        actorUserId: req.user.id,
       });
-    } catch (error) {
-      throw translateDuplicateBookingError(error) ?? error;
-    }
+      return booking.id;
+    });
 
     const booking = await fetchBookingWithMember(bookingId);
     res.status(201).json({ booking: serializeBooking(booking) });
   } catch (error) {
     if (error instanceof BookingError) {
       return res.status(error.status).json({ error: error.message });
+    }
+    const translated = translateBookingPgError(error);
+    if (translated) {
+      return res.status(translated.status).json({ error: translated.message });
     }
     next(error);
   }
@@ -229,6 +216,7 @@ router.post('/:bookingId/cancel', authenticate, requireRole('staff'), async (req
     }
 
     const { promotedIds } = await db.transaction(async (trx) => {
+      await trx.raw("SET LOCAL lock_timeout = '3s'");
       const session = await lockSessionForBooking(trx, peek.session_id);
       const booking = await loadBookingForUpdate(trx, bookingId);
       if (!booking) {
@@ -284,6 +272,10 @@ router.post('/:bookingId/cancel', authenticate, requireRole('staff'), async (req
     if (error instanceof BookingError) {
       return res.status(error.status).json({ error: error.message });
     }
+    const translated = translateBookingPgError(error);
+    if (translated) {
+      return res.status(translated.status).json({ error: translated.message });
+    }
     next(error);
   }
 });
@@ -311,6 +303,7 @@ router.post('/:bookingId/settle', authenticate, async (req, res, next) => {
     }
 
     await db.transaction(async (trx) => {
+      await trx.raw("SET LOCAL lock_timeout = '3s'");
       const session = await lockSessionForBooking(trx, peek.session_id);
 
       // Re-checked here, inside the transaction, against the session row
@@ -361,6 +354,10 @@ router.post('/:bookingId/settle', authenticate, async (req, res, next) => {
   } catch (error) {
     if (error instanceof BookingError) {
       return res.status(error.status).json({ error: error.message });
+    }
+    const translated = translateBookingPgError(error);
+    if (translated) {
+      return res.status(translated.status).json({ error: translated.message });
     }
     next(error);
   }

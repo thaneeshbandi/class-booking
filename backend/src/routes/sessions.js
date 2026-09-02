@@ -5,6 +5,7 @@ import {
   countOccupiedSeats,
   countSettledBookings,
   promoteWaitlistFIFO,
+  translateBookingPgError,
 } from '../domain/bookingTransaction.js';
 import {
   computeEndsAt,
@@ -262,6 +263,7 @@ router.patch('/:sessionId', requireRole('staff'), async (req, res, next) => {
     // read and decided against state re-read after acquiring this lock, never
     // against a value read before it.
     const outcome = await db.transaction(async (trx) => {
+      await trx.raw("SET LOCAL lock_timeout = '3s'");
       const existing = await trx('sessions').where({ id: idResult.data }).forUpdate().first();
       if (!existing) {
         return { error: { status: 404, body: { error: 'Session not found.' } } };
@@ -413,6 +415,10 @@ router.patch('/:sessionId', requireRole('staff'), async (req, res, next) => {
       promoted: promotedBookings.map(serializeBooking),
     });
   } catch (error) {
+    const translated = translateBookingPgError(error);
+    if (translated) {
+      return res.status(translated.status).json({ error: translated.message });
+    }
     next(error);
   }
 });
@@ -437,6 +443,7 @@ router.delete('/:sessionId', requireRole('staff'), async (req, res, next) => {
     // the session gone (404, cleanly) or sees the booking this check just
     // counted.
     const outcome = await db.transaction(async (trx) => {
+      await trx.raw("SET LOCAL lock_timeout = '3s'");
       const existing = await trx('sessions').where({ id: idResult.data }).forUpdate().first();
       if (!existing) {
         return { error: { status: 404, body: { error: 'Session not found.' } } };
@@ -460,6 +467,10 @@ router.delete('/:sessionId', requireRole('staff'), async (req, res, next) => {
     }
     res.status(204).end();
   } catch (error) {
+    const translated = translateBookingPgError(error);
+    if (translated) {
+      return res.status(translated.status).json({ error: translated.message });
+    }
     next(error);
   }
 });

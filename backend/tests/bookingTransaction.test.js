@@ -9,8 +9,10 @@ import {
   loadBookingForUpdate,
   lockSessionForBooking,
   promoteWaitlistFIFO,
+  translateBookingPgError,
   writeBookingEvent,
 } from '../src/domain/bookingTransaction.js';
+import { BookingError } from '../src/domain/bookingErrors.js';
 
 /**
  * Phase P2 — the reusable booking-transaction primitives, exercised directly
@@ -390,5 +392,31 @@ describe('promoteWaitlistFIFO', () => {
       });
     });
     assert.deepEqual(promoted, []);
+  });
+});
+
+describe('translateBookingPgError', () => {
+  it('maps 23505 (unique violation) to a 409 naming the duplicate-booking rule', () => {
+    const translated = translateBookingPgError({ code: '23505' });
+    assert.ok(translated instanceof BookingError);
+    assert.equal(translated.status, 409);
+  });
+
+  it('maps 23503 (foreign key violation) to a 409', () => {
+    const translated = translateBookingPgError({ code: '23503' });
+    assert.ok(translated instanceof BookingError);
+    assert.equal(translated.status, 409);
+  });
+
+  it('maps 55P03 (lock not available) to a 409', () => {
+    const translated = translateBookingPgError({ code: '55P03' });
+    assert.ok(translated instanceof BookingError);
+    assert.equal(translated.status, 409);
+  });
+
+  it('returns null for an unrecognized error, so the caller rethrows it', () => {
+    assert.equal(translateBookingPgError({ code: '42601' }), null);
+    assert.equal(translateBookingPgError(new Error('boom')), null);
+    assert.equal(translateBookingPgError(undefined), null);
   });
 });
