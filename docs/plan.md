@@ -720,6 +720,44 @@ class title under Class, session date/time under Session, status badge under Sta
 under Booked at, Cancel button or em-dash placeholder under Actions — and confirmed correct, not merely
 inferred from the passing test.
 
+## Session 15 — final submission audit
+
+A verification-only session: re-read `README.md` in full from the repository (not from any earlier
+summary), built a private requirement-by-requirement checklist against it, and verified each of the ten
+mandatory goals against actual code, an actual passing test, and actual documentation — not against
+whether a page merely existed. This included directly inspecting the `booking_events` immutability
+trigger migration and its live test coverage (goal 9, treated as high-priority per this session's own
+instruction), the recurring-generation same-batch-conflict handling, the half-open overlap-interval
+predicate, the membership-alert window's exact boundary tests (+7 included, +8 excluded), the nav badge's
+shared predicate with the Alerts page, a grep of the entire frontend for raw status-prefix/stack-trace/
+SQL leakage, the git history and working tree for accidental artifacts or secrets, and the full env-var/
+CORS/cookie/production-startup deployment-readiness checklist.
+
+One genuine gap was found and fixed: the attendance CSV export (goal 7) had no protection against CSV/
+formula injection in the member-name field — see `docs/decisions.md`, Decision 43, for the full
+reasoning and `docs/ai-prompts.md` for this session's account of finding and verifying it. Nothing else
+audited required a code change: every other goal's authorization boundary, concurrency protection, and
+documented behavior matched what `README.md` actually asks for, backed by a real, currently-passing test.
+One observation, not a fix: goal 4's concurrency test suite explicitly races booking creation, capacity
+changes, and cancellation-triggered promotion, but has no *concurrent* duplicate-cancel or concurrent-
+settlement race test specifically (only a sequential "reject cancelling an already-cancelled booking"
+test) — both paths go through the identical session-then-booking lock protocol the other race tests
+already prove correct, so this is recorded as a coverage gap worth knowing about, not a defect being
+claimed or silently ignored.
+
+`.Rhistory` remains present and untracked in the working tree, exactly as it was found at the start of
+the very first session of work in this repository — pre-existing, unrelated to this project, and left
+untouched per this session's own explicit instruction not to remove it without cause.
+
+### Verification
+
+Backend `npm test --test-concurrency=1` — 451 tests, 450 passing, 1 skipped (the same `APP_DB_URL`-gated
+schema test every earlier session also skips) — and `npm run lint`, clean. Frontend `npm run lint` and
+`npm run build`, clean. The full Playwright suite, 64 tests, run twice consecutively (64/64 both times).
+A fresh `npm run db:reset` (cleanly applying all 13 migrations from zero and re-seeding) followed by the
+backend suite once more (451/450/1, identical) and `npm run lint` (clean), then the Playwright suite once
+more against the freshly reset database (64/64, clean).
+
 ## What was cut
 
 Nothing was cut from goal 4's own scope — all eight specified phases, including the full required

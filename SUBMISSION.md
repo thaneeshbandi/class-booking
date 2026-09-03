@@ -152,6 +152,21 @@ the pre-fix code before being trusted. 64 Playwright tests total (the 63 above p
 clean and once more clean after a fresh `db:reset`; backend suite unchanged (450 tests, 449 passing, 1
 skipped — no backend files were touched, per this milestone's own scope).
 
+**A final submission audit** re-verified every one of the ten mandatory goals directly against
+`README.md` (code path, test, and documentation for each — not "a page exists"), the security/
+authorization/history-immutability model, the account-linking and OTP subsystems, the git history and
+working tree for accidental artifacts or secrets, and the full deployment-readiness checklist. It found
+and fixed exactly one genuine gap: the attendance CSV export (goal 7) had no protection against
+CSV/formula injection — a staff-entered member name starting with `=`, `+`, `-`, or `@` (e.g.
+`=cmd|'/ccalc'!A1`) would previously reach the exported file unmodified, which spreadsheet software
+offers to execute as a formula the moment the file is opened. Fixed with the standard mitigation (a
+leading apostrophe on any such field, `domain/csv.js`), covered by a new backend test verified to
+actually fail against the pre-fix code before being trusted. Final counts after this fix: backend 451
+tests, 450 passing, 1 skipped (the same `APP_DB_URL`-gated schema test), `npm run lint` clean; frontend
+`npm run lint` and `npm run build` clean; Playwright 64/64, run twice consecutively and once more after a
+fresh `db:reset` (all three runs clean). See `docs/decisions.md`, Decision 43, and `docs/plan.md`,
+Session 15, for full detail, including the rest of what the audit checked and found already correct.
+
 ## How much time did you actually spend?
 
 ## What would you do next, with another 12 hours?

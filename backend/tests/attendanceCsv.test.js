@@ -308,6 +308,26 @@ describe('GET /api/sessions/:sessionId/attendance.csv — CSV escaping', () => {
       `expected the escaped field ${JSON.stringify(expectedField)} in:\n${res.raw}`,
     );
   });
+
+  it('neutralizes a member name that looks like a spreadsheet formula (CSV/formula injection)', async () => {
+    const cookie = await loginAs(fixture.staff);
+    const session = await createRawSession({ capacity: 5, startsAt: futureDate(73) });
+    const member = await createMember({ full_name: "=cmd|'/ccalc'!A1" });
+    await bookMember(cookie, session.id, member.id);
+
+    const res = await fetchCsv(cookie, session.id);
+    assert.equal(res.status, 200, res.raw);
+
+    // A leading apostrophe is what makes every spreadsheet application treat
+    // the cell as literal text instead of offering to evaluate it as a
+    // formula when the export is opened — the raw name must never appear
+    // with `=` still in the leading position.
+    assert.ok(
+      res.raw.includes("'=cmd|'/ccalc'!A1"),
+      `expected the formula-neutralized field in:\n${res.raw}`,
+    );
+    assert.doesNotMatch(res.raw, /(?:^|,)=cmd/m);
+  });
 });
 
 describe('GET /api/sessions/:sessionId/attendance.csv — authorization', () => {

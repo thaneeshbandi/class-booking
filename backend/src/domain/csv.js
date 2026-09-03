@@ -7,10 +7,25 @@
  * break; an embedded double quote is doubled, per RFC 4180. Rows are joined
  * with CRLF, including after the final row, matching the RFC's recommended
  * line ending.
+ *
+ * A field is also neutralized against CSV/formula injection: the attendance
+ * export includes a staff-entered member name, free text an attacker could
+ * set to something like `=cmd|'/ccalc'!A1`, which Excel/Sheets/LibreOffice
+ * would offer to execute as a formula the moment the file is opened — not a
+ * server-side vulnerability, but a real risk to whoever opens the export.
+ * The standard mitigation (OWASP) is applied: a field starting with `=`,
+ * `+`, `-`, or `@` gets a leading apostrophe, which every spreadsheet
+ * application treats as "this cell is text," and which a plain CSV/RFC 4180
+ * reader sees as nothing more than an ordinary leading character in the
+ * field's own text content.
  */
+const FORMULA_TRIGGER = /^[=+\-@]/;
 
 export function escapeCsvField(value) {
-  const str = value === null || value === undefined ? '' : String(value);
+  let str = value === null || value === undefined ? '' : String(value);
+  if (FORMULA_TRIGGER.test(str)) {
+    str = `'${str}`;
+  }
   if (/[",\r\n]/.test(str)) {
     return `"${str.replace(/"/g, '""')}"`;
   }

@@ -662,3 +662,23 @@ backend/src/domain/sessionConflicts.js`), not invented for this file.
   supposedly never been granted any membership at all. Fixed in `domain/memberLinking.js`, and a new
   backend test (`tests/memberPortal.test.js`, "rejects a new booking for a brand-new signup that was never
   granted a real membership") added specifically to close the gap the first pass's own test suite missed.
+
+## Decision 43
+
+- **Chose:** Neutralize CSV/formula injection in the attendance export (`domain/csv.js`) — any field
+  starting with `=`, `+`, `-`, or `@` gets a leading apostrophe before RFC 4180 escaping is applied.
+- **Rejected:** Leaving the export as plain RFC 4180 escaping only (commas/quotes/newlines), on the
+  reasoning that `README.md` never mentions this by name.
+- **Why:** A session's attendance export includes each booked member's `full_name` — staff-entered free
+  text, not a value this application controls the shape of. A name (or, more realistically, a malicious
+  one deliberately chosen to look like one) starting with `=`, `+`, `-`, or `@` is exactly what Excel,
+  Google Sheets, and LibreOffice treat as the start of a formula, and current versions all still prompt to
+  execute it the moment the exported file is opened — a well-known, real class of vulnerability (CSV/
+  formula injection, OWASP-documented) independent of whether the brief names it. This surfaced during a
+  final submission audit that specifically asked whether "formula-like values" were handled — checking
+  found they were not, so this is a genuine, narrowly-scoped security fix, not a reinterpretation of a
+  business rule or an invented requirement. The mitigation is the standard one: a leading apostrophe makes
+  every spreadsheet application treat the cell as literal text, and is invisible to a plain RFC 4180
+  reader (it is simply one more leading character in the field's own text content, never a CSV control
+  character). Covered by a new test (`tests/attendanceCsv.test.js`) verified to actually fail against the
+  pre-fix code before being trusted as a real regression guard.

@@ -951,3 +951,63 @@ reading the rendered DOM's cell counts rather than only looking at a screenshot.
 wrong during this session's verification pass; every other change made (spacing, nowrap, the Cancel
 button border, the duplicate CSS removal) was a genuine, targeted fix for something specifically named in
 the brief, not a rewrite.
+
+## Final submission audit
+
+### Prompt
+
+A long, exhaustively itemized final-audit instruction, explicitly scoped as verification-only: no new
+product features, no UI redesign, no refactoring working architecture for style, no changes to
+`README.md`. It required reading `README.md` directly from the repository (not relying on any earlier
+summary), building a private requirement-by-requirement checklist against every mandatory goal with an
+exact code path, test, and documentation location for each, and specifically flagged goal 9 (immutable
+history) as a high-priority direct inspection of the trigger/privilege implementation rather than a
+description of it. It itemized dozens of specific things to verify across every goal (concurrency race
+scenarios, the alert window's exact day-boundary behavior, CSV escaping *and* formula-injection handling,
+N+1 query patterns, OTP/email security, the global error-copy system via a targeted grep for raw status
+prefixes), required a git/artifact audit (secrets, `.env` files, test artifacts, `.Rhistory`'s status
+specifically), a documentation audit for stale or contradictory claims without erasing legitimate
+historical entries, the full required test sequence run fresh, and a fix policy limited to genuine
+functional/security violations, broken documentation, accidental artifacts, and real test/config issues —
+explicitly nothing else.
+
+### What was produced
+
+Read `README.md` in full directly from the file. Verified, by reading the actual code (not from memory):
+the `booking_events` append-only trigger migration and its live immutability test coverage; that no
+application route anywhere issues an UPDATE or DELETE against `booking_events` (grepped for it directly);
+the recurring-generation same-transaction sequential loop (confirmed later candidates in one batch do see
+earlier candidates' just-inserted rows); the half-open overlap interval (`<`/`>`, confirmed back-to-back
+sessions are not flagged); the membership-alert predicate and its dedicated boundary tests (+7 included,
++8 excluded, both already present and passing); that the sidebar alert badge calls the identical backend
+endpoint the Alerts page itself does; and a repository-wide grep for raw status-prefix/stack-trace/SQL
+leakage in the frontend, which found none. Audited the git history (36 real incremental commits, not a
+squash), the working tree (clean except the pre-existing, unrelated `.Rhistory`), and every tracked file
+for secrets (none — only `.env.example` templates, real `.env` files correctly gitignored and untracked).
+Ran the full required verification sequence fresh, end to end, once for this session's own final numbers:
+backend test+lint, frontend lint+build, Playwright twice, a fresh `db:reset`, backend test again, and
+Playwright once more — all clean, all numbers recorded honestly in `SUBMISSION.md` and `docs/plan.md`
+Session 15 rather than asserted from an earlier run.
+
+### What was correct
+
+Every mandatory goal's authorization boundary, concurrency protection, and documented behavior matched
+`README.md` and had a real, currently-passing test backing it — nothing required a code change beyond the
+one gap below. The account-linking, member-portal, and OTP subsystems built in the two prior milestones
+held up under this session's independent re-verification (dev-only OTP route confirmed genuinely absent
+from a production build via the `!isProduction` gate at registration time, not merely at response time;
+no hardcoded credentials anywhere in `src/`; the seed script refuses to run without a real `SEED_PASSWORD`
+env var).
+
+### What was wrong, and what was corrected
+
+One genuine gap, found by directly checking the specific thing the audit asked about ("formula-like
+values handled appropriately") rather than assuming the existing RFC 4180 escaping already covered it: the
+attendance CSV export had no protection against CSV/formula injection in the member-name field. Fixed and
+covered by a new test verified to actually fail against the pre-fix code — full detail in
+`docs/decisions.md`, Decision 43. One thing noted but deliberately not "fixed," per the audit's own scope
+limits: goal 4's concurrency suite has no dedicated *concurrent* duplicate-cancel or concurrent-settlement
+race test (only a sequential rejection test for each) — both paths are protected by the identical lock
+protocol the suite's other race tests already prove correct, so this is recorded as an honest coverage
+observation in `docs/plan.md` Session 15, not silently passed over and not treated as a defect requiring a
+new feature-shaped fix that the audit's own instructions explicitly ruled out adding.
