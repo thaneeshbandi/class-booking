@@ -179,7 +179,10 @@ describe('4. tables', () => {
       GROUP BY t.typname ORDER BY t.typname
     `);
     const byName = Object.fromEntries(rows.map((r) => [r.typname, r.labels]));
-    assert.equal(byName.user_role, 'staff,instructor');
+    // 'member' (migration 011) is a deliberate, approved third value for
+    // public self-service signup — see that migration's own comment for why
+    // it carries no elevated access anywhere in the API.
+    assert.equal(byName.user_role, 'staff,instructor,member');
     // Declaration order is load-bearing: it is what makes "sort by status"
     // produce lifecycle order rather than alphabetical order.
     assert.equal(

@@ -194,7 +194,7 @@ function SessionForm({ initial, classes, rooms, instructors, onCancel, onSaved }
 }
 
 export function SessionsPage() {
-  const { isStaff } = useAuth();
+  const { isStaff, isInstructor } = useAuth();
   const [searchParams, setSearchParams] = useSearchParams();
   const classIdFilter = searchParams.get('classId') ?? '';
 
@@ -259,7 +259,16 @@ export function SessionsPage() {
   return (
     <div>
       <div className="page-header">
-        <h1>{isStaff ? 'Sessions' : 'My Sessions'}</h1>
+        <div className="page-header-text">
+          <h1>{isStaff ? 'Sessions' : isInstructor ? 'My Sessions' : 'Sessions'}</h1>
+          <p className="page-subtitle">
+            {isStaff
+              ? 'Every scheduled session across all classes, rooms, and instructors.'
+              : isInstructor
+                ? 'Sessions where you are the primary or a co-instructor.'
+                : 'Sessions you have a relationship to.'}
+          </p>
+        </div>
         {isStaff ? (
           <div className="button-row">
             <Link to="/sessions/recurring" className="btn btn-secondary">
@@ -298,6 +307,7 @@ export function SessionsPage() {
       ) : null}
 
       {!loading && !error && sessions?.length > 0 ? (
+        <div className="table-scroll">
         <table className="table">
           <thead>
             <tr>
@@ -306,7 +316,7 @@ export function SessionsPage() {
               <th>Room</th>
               <th>Instructor</th>
               <th className="numeric">Capacity</th>
-              <th />
+              <th className="col-actions">Actions</th>
             </tr>
           </thead>
           <tbody>
@@ -317,7 +327,8 @@ export function SessionsPage() {
                 <td>{roomById[session.roomId]?.name ?? `#${session.roomId}`}</td>
                 <td>{instructorById[session.primaryInstructorId]?.fullName ?? `#${session.primaryInstructorId}`}</td>
                 <td className="numeric">{session.capacity}</td>
-                <td className="table-actions">
+                <td className="col-actions">
+                <div className="table-actions">
                   <Link className="btn btn-secondary btn-small" to={`/sessions/${session.id}`}>
                     View
                   </Link>
@@ -339,11 +350,13 @@ export function SessionsPage() {
                       </button>
                     </>
                   ) : null}
+                </div>
                 </td>
               </tr>
             ))}
           </tbody>
         </table>
+        </div>
       ) : null}
 
       {modal ? (

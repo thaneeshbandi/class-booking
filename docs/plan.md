@@ -16,7 +16,8 @@ happened, not a retrofit.
 | 7 | 2026-09-02, later still | Goal 10 — expiring membership alerts (`GET /api/members/alerts/expiring`, `POST /api/members/:memberId/alerts/membership-expiry/dismiss`), its test suite, and this documentation update. |
 | 8 | 2026-09-02, later still | Final pre-frontend audit — documentation consistency, security/timezone/state-machine/SQL review, and (found during the audit) implementing the missing goal-1 member create/edit endpoints. |
 | 9 | 2026-09-02, later still | The frontend — a React/Vite app covering every mandatory-goal workflow, two small backend additions it genuinely needed (CORS, room/instructor listing), a real cross-origin CSV-download bug found and fixed, and this documentation update. |
-| 10 (this one) | 2026-09-02, later still | Automated browser E2E verification with Playwright — real Chromium driving the actual running frontend and backend; one genuine responsive-layout bug and one genuine pagination bug found and fixed along the way; this documentation update. |
+| 10 | 2026-09-02, later still | Automated browser E2E verification with Playwright — real Chromium driving the actual running frontend and backend; one genuine responsive-layout bug and one genuine pagination bug found and fixed along the way; this documentation update. |
+| 11 (this one) | 2026-09-02, later still | Final frontend UI/UX polish — a full visual redesign, a fixed booking-table action column, a client-side recurring-generation UX pass, and a new public signup flow (migration 011, `POST /api/auth/signup`), each with new Playwright coverage; this documentation update. |
 
 Session 2's five foundation commits share one timestamp to the minute in `git log`, which is a real
 gap in this record: they clearly did not all land in the same sixty seconds, and no finer-grained
@@ -442,6 +443,76 @@ satisfying this milestone's own repeatability requirement; the backend's full su
 the backend suite once more against the freshly reset database (identical result). No backend test
 regressed from any frontend-side change made this session.
 
+## Session 11 — final frontend UI/UX polish
+
+Read in order before changing anything: `README.md`, `CLAUDE.md`, `SUBMISSION.md`, every `docs/*.md`
+file, the entire frontend source, and the current Playwright suite — specifically to find, before
+touching any authorization code, exactly which existing checks a new account role would and would not
+satisfy (see Decision 26), and to confirm which existing Playwright locators were role/text-based
+(safe to redesign around) versus structural (which would have constrained the CSS rewrite).
+
+Implementation order: the signup backend (migration `011_user_role_member.js`, `POST /api/auth/signup`,
+`tests/signup.test.js`, a member-role addition to `tests/authorization.test.js`) came first, since every
+other piece of this milestone was frontend-only and this was the one place a genuine backend change was
+both needed and explicitly pre-authorized by the milestone's own instructions ("add a backend endpoint
+only if signup cannot be implemented entirely with the current backend API" — it could not, since no
+self-service role existed at all). The full `styles.css` rewrite came next, before touching individual
+pages, since every page already shared the same class names and a redesigned stylesheet is what let the
+bookings-table fix, the Classes-page polish, and the new Signup/Welcome pages all inherit consistent
+typography/spacing/focus states for free rather than each page reinventing them. The bookings-table
+fixed-action-column fix (Decision 28) and the Classes-page polish came next, then the
+`RecurringSessionsPage` rewrite (the largest single piece of new client-side logic this session), then
+the signup frontend (`SignupPage.jsx`, `WelcomePage.jsx`, routing, `AuthContext`), each verified with a
+targeted Playwright run before moving to the next.
+
+### What was correct
+
+Auditing every `requireRole(...)`/`role !== 'staff'` check in the backend *before* writing the
+migration, rather than after, meant the new `member` role's authorization boundary was designed to be
+safe by construction rather than discovered to be safe by testing afterward — the new
+`tests/authorization.test.js` boundary suite (4 tests) and `tests/signup.test.js` (9 tests) both passed
+on their first complete run. The CSS redesign — touching nearly every rule in `styles.css` — needed zero
+changes to any pre-existing Playwright locator: all 28 tests in `auth.spec.js`, `staff-flow.spec.js`,
+`instructor-flow.spec.js`, and `responsive.spec.js` passed unchanged on the first run after the
+redesign, confirming those tests were genuinely role/label/text-based rather than accidentally coupled
+to markup this session rewrote.
+
+### What was wrong, and what was corrected
+
+One real bug in this session's own new Playwright test, not in the application — detailed in full in
+`docs/ai-prompts.md`'s account of this session, summarized here: the first version of the
+"conflicting recurring session" test created its fixture session through the existing session-create
+form and expected it to collide with a recurring-generation attempt at "the same" local time. It did
+not, because the two forms deliberately convert "local time" using two different, both-correct timezone
+bases (the browser's own timezone vs. `STUDIO_TIMEZONE`) — a genuine, pre-existing, intentional property
+of the application this milestone's own instructions required leaving unchanged, not a bug to fix.
+Root-caused by querying the database directly for the two sessions' actual stored instants (4.5 hours
+apart, matching IST-vs-BST exactly) rather than guessing from the UI. Fixed by creating both the fixture
+and the conflicting attempt through the same form, not by changing any application timezone logic.
+
+### Verification
+
+What was actually run, in order: backend `npm test` (404 tests, 403 passing, 1 skipped — the three new
+signup/authorization tests are the entire delta from the previous milestone's 391) and `npm run lint`
+(clean); frontend `npm run lint` and `npm run build` (both clean); the full Playwright suite
+(`npx playwright test`, 41 tests — the previous milestone's 32 plus a new `polish.spec.js` with 13) —
+which surfaced the timezone-basis test bug above, then two full, clean, consecutive runs (41/41 both
+times) once it was fixed; a fresh `npm run db:reset` (now applying 11 migrations) followed by the
+backend suite once more (identical 404/403/1/0 result) and the Playwright suite once more against the
+freshly reset database (41/41). Every one of the twelve concrete flows this milestone's own instructions
+listed is covered by name in `polish.spec.js`, `staff-flow.spec.js`, or `instructor-flow.spec.js` — see
+`SUBMISSION.md` for the mapping.
+
+One further, more extended verification pass ran the suite six more times in a row. Five were clean;
+one failed a single test (`staff-flow.spec.js`'s "creates a session... then opens its detail" step) with
+no code change in between it and the clean runs immediately before and after it. Investigated rather
+than dismissed: that specific test's code is unchanged from the previous Playwright milestone, already
+debugged there, and re-running it four more times immediately afterward reproduced nothing — no failure
+recurred. Recorded honestly as an isolated, non-reproducible timing blip rather than a fixed bug, since
+there was no code-level cause to identify or a fix to make; the required "run at least twice, both
+clean" bar was independently met multiple times before and after it, including the final two official
+verification runs immediately above.
+
 ## What was cut
 
 Nothing was cut from goal 4's own scope — all eight specified phases, including the full required
@@ -469,5 +540,11 @@ interactive browser testing (no Chrome extension was connected in the session th
 verification there leaned on `curl`-simulated requests and a careful reading of the actual browser
 CORS/fetch specification where `curl` alone could not tell the whole story). That gap was closed in
 session 10 above with real Playwright browser automation, which is exactly what caught the two real
-application bugs (pagination, responsive layout) `curl` had no way to see. The stretch ideas remain
-untouched at the project level, same as every prior session.
+application bugs (pagination, responsive layout) `curl` had no way to see.
+
+Session 11's own polish milestone added a public signup flow (a real, minimal, authenticated `member`
+role) at the user's explicit request — this is infrastructure for the "online self-service booking for
+members" stretch idea listed in `README.md`, not that stretch idea itself: a signed-up member can log
+in and out, but there is still no booking capability for them anywhere in the product (see Decision 27,
+and `docs/architecture.md`'s "What was deliberately not built" section). No stretch idea is complete,
+and `SUBMISSION.md` says so plainly rather than letting a working signup form read as more than it is.

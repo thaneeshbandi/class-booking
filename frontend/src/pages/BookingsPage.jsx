@@ -171,7 +171,10 @@ export function BookingsPage() {
   return (
     <div>
       <div className="page-header">
-        <h1>Bookings</h1>
+        <div className="page-header-text">
+          <h1>Bookings</h1>
+          <p className="page-subtitle">Search, filter, and manage bookings across every session.</p>
+        </div>
         {isStaff ? (
           <button type="button" className="btn btn-primary" onClick={openCreateForm}>
             Create booking
@@ -231,6 +234,7 @@ export function BookingsPage() {
 
       {!loading && !error && data?.bookings.length > 0 ? (
         <>
+          <div className="table-scroll">
           <table className="table">
             <thead>
               <tr>
@@ -239,40 +243,50 @@ export function BookingsPage() {
                 <th>Session</th>
                 <th>Status</th>
                 <th>Booked at</th>
-                <th />
+                <th className="col-actions">Actions</th>
               </tr>
             </thead>
             <tbody>
-              {data.bookings.map((booking) => (
-                <tr key={booking.id}>
-                  <td>
-                    <Link to={`/bookings/${booking.id}`}>{booking.member.fullName}</Link>
-                  </td>
-                  <td>{booking.class.title}</td>
-                  <td>
-                    <Link to={`/sessions/${booking.session.id}`}>
-                      {new Date(booking.session.startsAt).toLocaleString()}
-                    </Link>
-                  </td>
-                  <td>
-                    <StatusBadge status={booking.status} />
-                  </td>
-                  <td>{new Date(booking.bookedAt).toLocaleString()}</td>
-                  <td className="table-actions">
-                    {isStaff && CANCELLABLE.has(booking.status) ? (
-                      <button
-                        type="button"
-                        className="btn btn-danger btn-small"
-                        onClick={() => setCancelTarget(booking)}
-                      >
-                        Cancel
-                      </button>
-                    ) : null}
-                  </td>
-                </tr>
-              ))}
+              {data.bookings.map((booking) => {
+                const canCancel = isStaff && CANCELLABLE.has(booking.status);
+                return (
+                  <tr key={booking.id}>
+                    <td>
+                      <Link to={`/bookings/${booking.id}`}>{booking.member.fullName}</Link>
+                    </td>
+                    <td>{booking.class.title}</td>
+                    <td>
+                      <Link to={`/sessions/${booking.session.id}`}>
+                        {new Date(booking.session.startsAt).toLocaleString()}
+                      </Link>
+                    </td>
+                    <td>
+                      <StatusBadge status={booking.status} />
+                    </td>
+                    <td>{new Date(booking.bookedAt).toLocaleString()}</td>
+                    <td className="col-actions">
+                      <div className="table-actions">
+                        {canCancel ? (
+                          <button
+                            type="button"
+                            className="btn btn-danger btn-small"
+                            onClick={() => setCancelTarget(booking)}
+                          >
+                            Cancel
+                          </button>
+                        ) : (
+                          <span className="table-actions-placeholder" aria-hidden="true">
+                            —
+                          </span>
+                        )}
+                      </div>
+                    </td>
+                  </tr>
+                );
+              })}
             </tbody>
           </table>
+          </div>
           <Pagination
             page={data.pagination.page}
             totalPages={data.pagination.totalPages}

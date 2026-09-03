@@ -110,7 +110,10 @@ export function MembersPage() {
   return (
     <div>
       <div className="page-header">
-        <h1>Members</h1>
+        <div className="page-header-text">
+          <h1>Members</h1>
+          <p className="page-subtitle">Add members and keep their membership expiry up to date.</p>
+        </div>
         <button type="button" className="btn btn-primary" onClick={() => setModal('create')}>
           Add member
         </button>
@@ -121,13 +124,14 @@ export function MembersPage() {
       {!loading && !error && members?.length === 0 ? <EmptyState label="No members yet." /> : null}
 
       {!loading && !error && members?.length > 0 ? (
+        <div className="table-scroll">
         <table className="table">
           <thead>
             <tr>
               <th>Name</th>
               <th>Email</th>
               <th>Membership expires</th>
-              <th />
+              <th className="col-actions">Actions</th>
             </tr>
           </thead>
           <tbody>
@@ -136,7 +140,8 @@ export function MembersPage() {
                 <td>{member.fullName}</td>
                 <td>{member.email}</td>
                 <td>{member.membershipExpiresOn}</td>
-                <td className="table-actions">
+                <td className="col-actions">
+                <div className="table-actions">
                   <button
                     type="button"
                     className="btn btn-secondary btn-small"
@@ -144,11 +149,13 @@ export function MembersPage() {
                   >
                     Edit
                   </button>
+                </div>
                 </td>
               </tr>
             ))}
           </tbody>
         </table>
+        </div>
       ) : null}
 
       {modal ? (

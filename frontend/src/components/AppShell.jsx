@@ -25,10 +25,17 @@ const INSTRUCTOR_LINKS = [
   { to: '/bookings', label: 'Bookings' },
 ];
 
+// A signed-up `member` account has no elevated access anywhere in the API
+// (see migration 011) and no self-service feature has been built yet, so
+// there is nothing to link to beyond its own welcome page — an honest
+// reflection of what the account can actually do, not a placeholder for
+// admin views it would only see empty.
+const MEMBER_LINKS = [{ to: '/welcome', label: 'Home' }];
+
 export function AppShell() {
-  const { user, logout, isStaff } = useAuth();
+  const { user, logout, isStaff, isMember } = useAuth();
   const alertCount = useAlertCount();
-  const links = isStaff ? STAFF_LINKS : INSTRUCTOR_LINKS;
+  const links = isStaff ? STAFF_LINKS : isMember ? MEMBER_LINKS : INSTRUCTOR_LINKS;
 
   return (
     <div className="app-shell">

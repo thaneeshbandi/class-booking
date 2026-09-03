@@ -50,6 +50,7 @@ function ClassForm({ initial, onCancel, onSaved }) {
         className="form-input"
         value={title}
         onChange={(event) => setTitle(event.target.value)}
+        placeholder="e.g. Vinyasa Flow"
         required
         autoFocus
       />
@@ -62,6 +63,7 @@ function ClassForm({ initial, onCancel, onSaved }) {
         className="form-input"
         value={discipline}
         onChange={(event) => setDiscipline(event.target.value)}
+        placeholder="e.g. Yoga, Pilates, Strength"
         required
       />
 
@@ -74,6 +76,7 @@ function ClassForm({ initial, onCancel, onSaved }) {
         rows={3}
         value={description}
         onChange={(event) => setDescription(event.target.value)}
+        placeholder="A short description members and staff will see"
       />
 
       <div className="form-row">
@@ -90,6 +93,7 @@ function ClassForm({ initial, onCancel, onSaved }) {
             onChange={(event) => setDefaultDurationMinutes(event.target.value)}
             required
           />
+          <p className="form-help">Used for new sessions unless overridden per session.</p>
         </div>
         <div>
           <label className="form-label" htmlFor="class-capacity">
@@ -104,6 +108,7 @@ function ClassForm({ initial, onCancel, onSaved }) {
             onChange={(event) => setDefaultCapacity(event.target.value)}
             required
           />
+          <p className="form-help">Maximum members per session before waitlisting.</p>
         </div>
       </div>
 
@@ -126,6 +131,7 @@ export function ClassesPage() {
   const [includeArchived, setIncludeArchived] = useState(false);
   const [modal, setModal] = useState(null);
   const [actionError, setActionError] = useState(null);
+  const [notice, setNotice] = useState(null);
 
   function load() {
     setLoading(true);
@@ -138,18 +144,23 @@ export function ClassesPage() {
 
   useEffect(load, [includeArchived]);
 
-  function handleSaved() {
+  function handleSaved(klass) {
+    const wasCreate = modal === 'create';
     setModal(null);
+    setNotice(wasCreate ? `"${klass.title}" was created.` : `"${klass.title}" was updated.`);
     load();
   }
 
   async function handleArchiveToggle(klass) {
     setActionError(null);
+    setNotice(null);
     try {
       if (klass.archivedAt) {
         await restoreClass(klass.id);
+        setNotice(`"${klass.title}" was restored.`);
       } else {
         await archiveClass(klass.id);
+        setNotice(`"${klass.title}" was archived.`);
       }
       load();
     } catch (err) {
@@ -160,11 +171,19 @@ export function ClassesPage() {
   return (
     <div>
       <div className="page-header">
-        <h1>Classes</h1>
+        <div className="page-header-text">
+          <h1>Classes</h1>
+          <p className="page-subtitle">
+            The catalog of classes the studio offers. Create a class here, then schedule sessions for
+            it from the Sessions page.
+          </p>
+        </div>
         <button type="button" className="btn btn-primary" onClick={() => setModal('create')}>
           Create class
         </button>
       </div>
+
+      {notice ? <div className="state-block state-success">{notice}</div> : null}
 
       <label className="checkbox-label">
         <input
@@ -181,6 +200,7 @@ export function ClassesPage() {
       {!loading && !error && classes?.length === 0 ? <EmptyState label="No classes yet." /> : null}
 
       {!loading && !error && classes?.length > 0 ? (
+        <div className="table-scroll">
         <table className="table">
           <thead>
             <tr>
@@ -189,7 +209,7 @@ export function ClassesPage() {
               <th className="numeric">Duration</th>
               <th className="numeric">Capacity</th>
               <th>Status</th>
-              <th />
+              <th className="col-actions">Actions</th>
             </tr>
           </thead>
           <tbody>
@@ -206,7 +226,8 @@ export function ClassesPage() {
                     <Badge tone="tone-green">Active</Badge>
                   )}
                 </td>
-                <td className="table-actions">
+                <td className="col-actions">
+                <div className="table-actions">
                   <button
                     type="button"
                     className="btn btn-secondary btn-small"
@@ -221,11 +242,13 @@ export function ClassesPage() {
                   >
                     {klass.archivedAt ? 'Restore' : 'Archive'}
                   </button>
+                </div>
                 </td>
               </tr>
             ))}
           </tbody>
         </table>
+        </div>
       ) : null}
 
       {modal ? (

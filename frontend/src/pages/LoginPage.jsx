@@ -1,5 +1,5 @@
 import { useState } from 'react';
-import { Navigate, useLocation, useNavigate } from 'react-router-dom';
+import { Link, Navigate, useLocation, useNavigate } from 'react-router-dom';
 
 import { ErrorBanner } from '../components/States.jsx';
 import { useAuth } from '../context/AuthContext.jsx';
@@ -37,7 +37,10 @@ export function LoginPage() {
   return (
     <div className="auth-screen">
       <form className="auth-card" onSubmit={handleSubmit}>
-        <h1>Class Booking</h1>
+        <div className="auth-brand">
+          <span className="auth-brand-mark" aria-hidden="true" />
+          <h1>Class Booking</h1>
+        </div>
         <p className="auth-subtitle">Sign in to continue.</p>
 
         <ErrorBanner error={error} />
@@ -72,6 +75,10 @@ export function LoginPage() {
         <button type="submit" className="btn btn-primary btn-block" disabled={submitting}>
           {submitting ? 'Signing in…' : 'Sign in'}
         </button>
+
+        <div className="auth-footer">
+          Don't have an account? <Link to="/signup">Sign up</Link>
+        </div>
       </form>
     </div>
   );

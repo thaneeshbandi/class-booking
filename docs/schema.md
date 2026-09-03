@@ -1,20 +1,24 @@
 # Schema
 
 Nine tables, three enums, one owner-only append-only table, one composite foreign key doing real work.
-Migrations live in `backend/migrations/001`–`010`; this describes what they actually built, verified
+Migrations live in `backend/migrations/001`–`011`; this describes what they actually built, verified
 live against PostgreSQL by `backend/tests/schema.test.js`.
 
 ## Enums
 
-`user_role` (`staff`, `instructor`), `booking_status` (`booked`, `waitlisted`, `cancelled`, `attended`,
-`no_show`), `booking_event_type` (`created`, `status_changed`, `note`) — native Postgres enums rather
-than `text` + `CHECK`, chosen specifically because enum values sort in declaration order: sorting
-bookings by status (goal 6) yields lifecycle order, not alphabetical order, with no `CASE` expression
-needed.
+`user_role` (`staff`, `instructor`, `member`), `booking_status` (`booked`, `waitlisted`, `cancelled`,
+`attended`, `no_show`), `booking_event_type` (`created`, `status_changed`, `note`) — native Postgres
+enums rather than `text` + `CHECK`, chosen specifically because enum values sort in declaration order:
+sorting bookings by status (goal 6) yields lifecycle order, not alphabetical order, with no `CASE`
+expression needed. `user_role`'s third value, `member`, was added in migration `011` for public
+self-service signup, added during the frontend-polish milestone, after the ten mandatory goals — see
+`docs/decisions.md`, Decision 26. It carries no elevated access anywhere in the API: every existing
+authorization check is either an explicit allowlist (`requireRole('staff')`) or scopes a non-staff
+caller to sessions they are the primary or a co-instructor of, which a `member` account can never be.
 
 ## Tables
 
-### `users` — staff and instructor logins
+### `users` — staff, instructor, and self-service member logins
 
 | column | type | notes |
 |---|---|---|
@@ -22,12 +26,14 @@ needed.
 | email | text | `UNIQUE`, lower-cased and trimmed by a `CHECK` |
 | password_hash | text | Argon2id PHC string; `CHECK (password_hash LIKE '$%')` |
 | full_name | text | non-empty by `CHECK` |
-| role | user_role | |
+| role | user_role | `staff`, `instructor`, or (migration 011) `member` |
 | is_active | boolean | default `true` |
 | created_at, updated_at | timestamptz | |
 
-The only case-insensitive-unique email in the schema — see `members` below for why members are
-different.
+The only case-insensitive-unique email in the schema — see `members` below for why the *other* kind of
+member (the studio's own booking-eligible members, a separate table, never a login) is different.
+A `role = 'member'` row here is an authenticated *account* created through `POST /api/auth/signup`; it
+has no relationship to the `members` table below, which is unrelated and staff-managed.
 
 ### `members` — people who book
 

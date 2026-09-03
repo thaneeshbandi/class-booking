@@ -403,6 +403,13 @@ re-expressing the same "expiry < today" comparison a second time.
 
 ## What was deliberately not built, and why
 
+- **Self-service booking for a signed-up member.** `POST /api/auth/signup` (added during the
+  frontend-polish milestone, after all ten mandatory goals) creates a real, authenticated `member`-role
+  account, but that account can browse or book nothing — it lands on a small static page saying so
+  (`WelcomePage.jsx`). "Online self-service booking for members" is one of `README.md`'s own stretch
+  ideas; building the actual booking experience was out of scope for what was asked (a signup *flow*,
+  not that feature), and a page that plainly says there's nothing to do yet is more honest than one that
+  implies a capability that was never built — see `docs/decisions.md`, Decisions 26–27.
 - **A frontend client-side cache (React Query, Redux, or similar).** Every mutation is followed by a
   plain re-fetch of the affected list; at this scale (a handful of pages, no offline requirement, no
   optimistic-update need the brief asks for) that is simpler to read, simpler to get right, and never

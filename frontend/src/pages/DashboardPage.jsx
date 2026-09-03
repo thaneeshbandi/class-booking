@@ -41,7 +41,12 @@ export function DashboardPage() {
 
   return (
     <div>
-      <h1>Dashboard</h1>
+      <div className="page-header">
+        <div className="page-header-text">
+          <h1>Dashboard</h1>
+          <p className="page-subtitle">A live snapshot of today's activity and the studio's recent trends.</p>
+        </div>
+      </div>
 
       <div className="stat-grid">
         <StatCard label="Sessions today" value={data.headline.sessionsToday} />
@@ -53,6 +58,7 @@ export function DashboardPage() {
       <div className="dashboard-grid">
         <section className="card">
           <h2>Bookings by status</h2>
+          <div className="table-scroll">
           <table className="table">
             <tbody>
               {STATUS_ORDER.map((status) => (
@@ -65,6 +71,7 @@ export function DashboardPage() {
               ))}
             </tbody>
           </table>
+          </div>
         </section>
 
         <section className="card">
@@ -72,6 +79,7 @@ export function DashboardPage() {
           {data.bookingsByClass.length === 0 ? (
             <p className="muted">No bookings yet.</p>
           ) : (
+            <div className="table-scroll">
             <table className="table">
               <thead>
                 <tr>
@@ -88,6 +96,7 @@ export function DashboardPage() {
                 ))}
               </tbody>
             </table>
+            </div>
           )}
         </section>
 

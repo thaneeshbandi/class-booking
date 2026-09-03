@@ -45,10 +45,14 @@ export function AlertsPage() {
 
   return (
     <div>
-      <h1>Membership expiry alerts</h1>
-      <p className="muted">
-        Members whose membership has expired, or expires within the next seven days.
-      </p>
+      <div className="page-header">
+        <div className="page-header-text">
+          <h1>Membership expiry alerts</h1>
+          <p className="page-subtitle">
+            Members whose membership has expired, or expires within the next seven days.
+          </p>
+        </div>
+      </div>
 
       {loading ? <LoadingState label="Loading alerts…" /> : null}
       {error ? <ErrorBanner error={error} onRetry={load} /> : null}
@@ -58,6 +62,7 @@ export function AlertsPage() {
       ) : null}
 
       {!loading && !error && alerts?.length > 0 ? (
+        <div className="table-scroll">
         <table className="table">
           <thead>
             <tr>
@@ -65,7 +70,7 @@ export function AlertsPage() {
               <th>Email</th>
               <th>Expires</th>
               <th>Status</th>
-              <th />
+              <th className="col-actions">Actions</th>
             </tr>
           </thead>
           <tbody>
@@ -79,7 +84,8 @@ export function AlertsPage() {
                     {alert.isExpired ? 'Expired' : 'Expiring soon'} · {daysLabel(alert.daysUntilExpiry)}
                   </Badge>
                 </td>
-                <td className="table-actions">
+                <td className="col-actions">
+                <div className="table-actions">
                   <button
                     type="button"
                     className="btn btn-secondary btn-small"
@@ -88,11 +94,13 @@ export function AlertsPage() {
                   >
                     {dismissingId === alert.memberId ? 'Dismissing…' : 'Dismiss'}
                   </button>
+                </div>
                 </td>
               </tr>
             ))}
           </tbody>
         </table>
+        </div>
       ) : null}
     </div>
   );

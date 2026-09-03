@@ -5,9 +5,10 @@ than papered over: goals 1–5 (authentication, classes, sessions, co-instructor
 foundation) were built in an earlier session whose actual prompts were not recorded anywhere this
 document can honestly draw from — `git log -- docs/ai-prompts.md` shows this file was never touched
 before the session that built goal 4. Inventing that history now would violate the one rule this file
-has to follow, so it isn't attempted. What follows is complete and accurate for the eight sessions that
-built goals 4, 6, 7, 8, and 10, the final pre-frontend audit, the frontend itself, and its Playwright
-E2E verification, each the one this document's respective author actually has a record of.
+has to follow, so it isn't attempted. What follows is complete and accurate for the nine sessions that
+built goals 4, 6, 7, 8, and 10, the final pre-frontend audit, the frontend itself, its Playwright
+E2E verification, and its final UI/UX polish pass, each the one this document's respective author
+actually has a record of.
 
 ## Implementing the booking lifecycle (goal 4)
 
@@ -579,3 +580,96 @@ login page, regardless of what text either page happens to render. (A `.sidebar-
 locator was tried as an intermediate fix and rejected: that element is `display: none` on the mobile
 viewport `responsive.spec.js` also logs in under, which would have made the fix correct on desktop and
 newly broken on mobile.)
+
+## Final frontend UI/UX polish milestone
+
+### Prompt
+
+One long, specific instruction given at the start of this session, explicitly framed as "final frontend
+polish before deployment" across seven numbered areas. In substance: (1) audit the Classes page for a
+prominent create CTA, a polished form, clean validation/error/success states, without adding a staff
+selector to class creation; (2) fix the Bookings table so a present-vs-absent Cancel button never
+misaligns other rows — a fixed, always-rendered Actions column, a placeholder when no action applies,
+horizontal scroll contained to the table on narrow screens — plus new/updated Playwright coverage for
+rows with and without an action; (3) improve the recurring-session screen so a genuinely-empty-candidate
+combination (the brief's own worked example: a single day whose actual weekday doesn't match the
+selected weekday) is caught client-side with a readable inline message and a disabled submit button
+rather than surfacing the backend's raw "400: ..." text, show which weekdays a date range covers, and
+preview an estimated session count before submitting — with backend validation kept authoritative and
+DST/timezone conversion left untouched — plus five specific test scenarios; (4) add a public signup flow
+that can never create a staff or instructor account (no role field anywhere in the UI or the request),
+inspecting the existing auth/schema design first and implementing the smallest safe solution rather than
+inventing a new authorization model, adding a backend endpoint only if signup couldn't be done with the
+existing API; (5) a full visual redesign of the whole app (typography, spacing, cards, buttons, badges,
+tables, modals, states, nav, responsive, focus states) within the existing plain-CSS architecture, no
+new component library; (6) make Login/Signup feel like the same product; (7) run the full verification
+sequence (backend test+lint, frontend lint+build, Playwright twice, real-browser checks at 375px and
+desktop) and twelve specific concrete flows, without stopping after code changes; update documentation
+honestly; and close with one incremental commit, `git status`, and the latest commit log.
+
+### What was produced
+
+Backend: migration `011_user_role_member.js` (a third `user_role` enum value, `'member'`); `POST
+/api/auth/signup` in `routes/auth.js` (Zod-validated, argon2-hashed, auto-authenticating, role always
+hardcoded, never read from the body); `tests/signup.test.js` (9 tests) and a new member-role boundary
+suite appended to `tests/authorization.test.js` (4 tests); `schema.test.js`'s enum-values assertion
+updated to include `'member'`, the one existing test this milestone's own schema change required
+touching. Frontend: `SignupPage.jsx`, `WelcomePage.jsx`, a `/signup` route and `HomeRedirect`/`AppShell`
+nav handling for the new role, `api/auth.js#signup` and `AuthContext#signup`/`isMember`; a rewritten
+`RecurringSessionsPage.jsx` with client-side candidate-date counting, weekday-coverage display,
+single-day mismatch detection, and a pre-submission preview, all computed from the same "YYYY-MM-DD as
+UTC midnight" convention the backend already uses for weekday determination; a fixed `.col-actions`
+table-column pattern (Decision 28) applied to every table with a per-row action
+(`BookingsPage`/`ClassesPage`/`MembersPage`/`AlertsPage`/`SessionsPage`/`SessionDetailPage`), each now
+wrapped in a `.table-scroll` container; subtitles and success notices added to `ClassesPage`; a
+full-file rewrite of `styles.css` (typography scale, spacing tokens, card/button/badge/modal/table/
+form/state-block polish, focus-visible rings, `:has()`-driven weekday-chip highlighting) with every
+existing class name preserved so no page's JSX needed a structural rewrite to pick it up. Four new
+Playwright test files' worth of coverage landed in one new `frontend/e2e/polish.spec.js` (13 tests:
+bookings alignment, four recurring-UX scenarios, four signup scenarios) plus `SECOND_ROOM_NAME` added to
+`fixtures.js`.
+
+### What was correct
+
+Reading `003_members.js`'s and `001_enums.js`'s own migration comments before deciding how to build
+signup at all paid off directly (Decision 26) — both already stated, as settled prior decisions, exactly
+the two facts ("members don't log in," "adding an enum value is an accepted, priced-in cost") that made
+"a third `user_role` value" the obviously smallest safe path rather than something arrived at by
+elimination. Auditing every existing `role !== 'staff'`/`requireRole(...)` check before writing the
+migration (not after) confirmed in advance, not just hoped, that a `'member'` account could not gain
+elevated access anywhere — verified concretely by the new authorization-boundary tests, which passed on
+their first run. The CSS redesign, despite touching nearly every rule in the file, needed zero changes
+to any existing Playwright locator in `auth.spec.js`, `staff-flow.spec.js`, `instructor-flow.spec.js`,
+or `responsive.spec.js` — all 28 of those tests passed unchanged on the very first run after the
+redesign, which is what happens when every existing `role`/label/text-based locator never depended on
+the styling or DOM-wrapper structure being replaced around it.
+
+### What was wrong, and what was corrected
+
+1. **A cross-timezone-basis bug in a new test, not in the application.** The first version of the
+   "conflicting session" recurring-UX test created its fixture session through the existing
+   "Create session" form and then generated a recurring session for "the same" local time and day,
+   expecting an instructor-conflict skip. It got a clean `Created (1)` instead — no conflict at all.
+   Querying the database directly showed why: the two sessions landed 4.5 hours apart in UTC.
+   `SessionForm`'s "Starts at (**your** local time)" field is deliberately interpreted in the *browser's*
+   own timezone (`new Date(datetimeLocalValue).toISOString()`), while `RecurringSessionsPage`'s "Local
+   start time" field is deliberately converted using `STUDIO_TIMEZONE` (`Europe/London`) on the
+   backend — two different, both entirely intentional, pre-existing timezone bases (the milestone's own
+   instructions explicitly required leaving DST/timezone conversion on the backend unchanged, and this
+   distinction predates this session). The test's assumption that "14:00" typed into either form refers
+   to the same instant was simply wrong on a test machine set to IST. Fixed by creating both the fixture
+   session and the conflicting attempt through the *same* form (`RecurringSessionsPage`, submitted
+   twice), so both go through the identical `STUDIO_TIMEZONE` conversion — not by changing any
+   application code, since the two forms' differing timezone semantics are correct as designed.
+2. **A stale-reference bug in the same new test file**, caught before it ever ran (found while writing
+   `isoDate()`, not by a failing assertion): the helper used `.toISOString()` (UTC calendar date) while
+   the sibling `toDatetimeLocalValue()` helper used local date components — the same class of mismatch
+   as above, just between two *test* helpers rather than two application forms. Fixed by making
+   `isoDate()` use local date components too, so a given `daysFromNow` offset names one calendar day
+   consistently everywhere it's used in this file.
+3. **The pagination-summary read race described in this file's own auth-flow entry above recurred in
+   spirit** but did not actually reoccur here — called out only because it was checked for deliberately:
+   every new assertion added in this milestone that follows a state-changing click uses an
+   auto-retrying `expect(locator).toHaveText(...)`/`toBeVisible()` rather than a one-shot
+   `textContent()` read, specifically because that exact race was already found and fixed once in the
+   previous milestone.

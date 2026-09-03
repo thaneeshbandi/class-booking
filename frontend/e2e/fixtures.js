@@ -36,6 +36,7 @@ export const STAFF = { email: 'ada.okonkwo@studio.test', fullName: 'Ada Okonkwo'
 export const INSTRUCTOR = { email: 'marco.silva@studio.test', fullName: 'Marco Silva' };
 export const SECOND_INSTRUCTOR = { email: 'priya.raman@studio.test', fullName: 'Priya Raman' };
 export const SEED_ROOM_NAME = 'Studio A';
+export const SECOND_ROOM_NAME = 'Studio B';
 export const SEED_CLASS_TITLE = 'Vinyasa Flow';
 
 /** A name/email unique to this test run, matching the timestamp-suffix

@@ -367,3 +367,58 @@ backend/src/domain/sessionConflicts.js`), not invented for this file.
   bug a fourth time from scratch. Caught by actually running the suite twice, per that same requirement
   — the dialog stayed open (a 409 conflict response, not a validation error) after the second run's
   session-create step, not a timeout or a crash, which is what made the cause traceable.
+
+## Decision 26
+
+- **Chose:** A public signup form creates a real, authenticated `users` row with a new third `user_role`
+  enum value, `'member'` (migration `011_user_role_member.js`), hardcoded server-side in
+  `POST /api/auth/signup` — never read from the request body under any field name.
+- **Rejected:** Writing the new account into `members` instead (the existing table for people who get
+  booked into sessions); inventing a parallel, separate authorization model or a new "pending approval"
+  account state; giving the signup form any UI to request a role at all, even a disabled/default one.
+- **Why:** `003_members.js`'s own migration comment already states, as a settled design decision from
+  the schema-foundation session, "Members do not log in, so there is no authentication reason for
+  uniqueness either" — adding a password to that table would be reopening a decision this project had
+  already made and documented, not the "smallest safe solution" this milestone's own instructions asked
+  for. `001_enums.js` separately already priced in this exact cost up front: "adding a value needs
+  `ALTER TYPE ... ADD VALUE`." Every existing authorization check in the codebase is either an explicit
+  allowlist (`requireRole('staff')`, `requireRole('instructor', 'staff')`) or scopes a non-staff caller
+  to sessions where *their own* user id is the primary or a co-instructor
+  (`scopeSessionsToInstructor`) — a `'member'` account can never satisfy either, so this addition could
+  not grant elevated access anywhere in the existing API even if every other safeguard failed. Verified
+  directly, not just argued: `tests/authorization.test.js` now includes a member-role account in the same
+  boundary battery staff/instructor accounts go through, and `POST /api/auth/signup` was smoke-tested
+  with `"role": "staff"` in the request body, confirmed ignored (see `docs/ai-prompts.md`).
+
+## Decision 27
+
+- **Chose:** A signed-up member's landing page (`WelcomePage.jsx`) is a small, honest static page
+  ("self-service booking isn't available yet") rather than the existing Sessions or Bookings views.
+- **Rejected:** Routing a member into `SessionsPage`/`BookingsPage` the same way an instructor lands
+  there.
+- **Why:** Both of those pages are built around instructor ownership — `SessionsPage` is titled "My
+  Sessions" and lists sessions scoped to "you are the primary or a co-instructor," which a member is
+  never either of, so the backend correctly returns an empty list (proven in
+  `tests/authorization.test.js`) but the *page itself* would read as broken or mislabeled for a role it
+  was never built to describe. "Online self-service booking for members" is one of `README.md`'s own
+  listed stretch ideas — genuinely building it (a member browsing classes and booking themselves in)
+  was out of scope for this milestone, which asked for the signup *flow*, not that feature; a page that
+  says plainly there is nothing to do yet is more honest than a page that implies a capability that does
+  not exist. `SUBMISSION.md` records this distinction explicitly rather than letting a working login
+  read as a completed stretch goal.
+
+## Decision 28
+
+- **Chose:** A fixed-width `.col-actions` table column (`96px`, growing only if a row's own content
+  genuinely needs more) applied to every table with a per-row action, with an explicit
+  `.table-actions-placeholder` ("—") rendered whenever no action applies to that row, rather than
+  leaving the cell empty.
+- **Rejected:** Leaving the actions `<td>` empty when no button applies (the pre-existing behavior) and
+  relying on the table's own automatic column-width computation to stay stable.
+- **Why:** HTML table layout sizes a column from the widest content across every row in it — with no
+  explicit width, a column that's sometimes a full-width "Cancel" button and sometimes nothing at all
+  computes a different natural width depending on which rows happen to be on screen (a filtered page
+  with zero cancellable bookings vs. one with several), which is what actually produced the reported
+  misalignment. An explicit pixel width removes that dependency entirely; the placeholder is not purely
+  cosmetic — Playwright's own alignment test (`polish.spec.js`) asserts on it directly, and a rendered
+  "nothing to do here" is a clearer signal than a blank cell a screen reader would skip past silently.

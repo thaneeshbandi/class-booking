@@ -370,3 +370,95 @@ describe('collection authorization: GET /api/bookings', () => {
     }
   });
 });
+
+// A `'member'` account (migration 011) is a real, authenticated login — not
+// a staff or instructor role — so it belongs in this file's own boundary
+// coverage, reusing the exact same oracles (`expectedSessionIds`,
+// `expectedBookingIds`) already proven correct for staff/instructor above,
+// rather than a parallel, separately-trusted assertion.
+describe('a signed-up member has an authenticated session but no elevated access anywhere', () => {
+  let member;
+  let memberCookie;
+
+  before(async () => {
+    const email = `member-authz-${Date.now()}-${Math.floor(Math.random() * 100_000)}@example.test`;
+    const signup = await server.request({
+      method: 'POST',
+      path: '/api/auth/signup',
+      body: { fullName: 'Authz Test Member', email, password: 'a-real-password-123' },
+    });
+    assert.equal(signup.status, 201);
+    assert.equal(signup.json.user.role, 'member');
+    member = { id: signup.json.user.id, email, role: 'member' };
+    memberCookie = signup.cookie;
+  });
+
+  after(async () => {
+    await db('users').where({ email: member.email }).del();
+  });
+
+  it('is denied every staff-only endpoint, the same as an instructor', async () => {
+    const res = await server.request({
+      method: 'GET',
+      path: '/api/dashboard',
+      cookie: memberCookie,
+    });
+    assert.equal(res.status, 403);
+  });
+
+  it('sees zero sessions and zero bookings — never matches any instructor-ownership scope', async () => {
+    const { ids: sessionIds } = await (async () => {
+      const res = await server.request({ method: 'GET', path: '/api/sessions', cookie: memberCookie });
+      assert.equal(res.status, 200);
+      return { ids: new Set(res.json.sessions.map((s) => String(s.id))) };
+    })();
+    const expectedSessions = await expectedSessionIds(member);
+    assert.deepEqual(sessionIds, expectedSessions);
+    assert.equal(sessionIds.size, 0, 'a member account owns no sessions as primary or co-instructor');
+
+    const { ids: bookingIds, total } = await fetchAllBookingIds(memberCookie);
+    const expectedBookings = await expectedBookingIds(member);
+    assert.deepEqual(bookingIds, expectedBookings);
+    assert.equal(total, 0);
+  });
+
+  it('cannot access an existing session it has no relationship to', async () => {
+    const res = await server.request({
+      method: 'GET',
+      path: `/api/sessions/${fixture.sessionId}`,
+      cookie: memberCookie,
+    });
+    assert.equal(res.status, 403);
+  });
+
+  it('cannot create a class, a session, or a booking', async () => {
+    const classRes = await server.request({
+      method: 'POST',
+      path: '/api/classes',
+      cookie: memberCookie,
+      body: { title: 'x', description: 'x', discipline: 'x', defaultDurationMinutes: 60, defaultCapacity: 10 },
+    });
+    assert.equal(classRes.status, 403);
+
+    const sessionRes = await server.request({
+      method: 'POST',
+      path: '/api/sessions',
+      cookie: memberCookie,
+      body: {
+        classId: 1,
+        primaryInstructorId: fixture.primaryInstructor.id,
+        roomId: 1,
+        startsAt: new Date(Date.now() + 999 * 86_400_000).toISOString(),
+      },
+    });
+    assert.equal(sessionRes.status, 403);
+
+    const bookingRes = await server.request({
+      method: 'POST',
+      path: '/api/bookings',
+      cookie: memberCookie,
+      body: { sessionId: fixture.sessionId, memberId: 1 },
+    });
+    assert.equal(bookingRes.status, 403);
+  });
+});

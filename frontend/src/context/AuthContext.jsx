@@ -1,6 +1,6 @@
 import { createContext, useContext, useEffect, useMemo, useState } from 'react';
 
-import { fetchCurrentUser, login as apiLogin, logout as apiLogout } from '../api/auth.js';
+import { fetchCurrentUser, login as apiLogin, logout as apiLogout, signup as apiSignup } from '../api/auth.js';
 import { setUnauthorizedHandler } from '../api/client.js';
 
 /**
@@ -49,8 +49,16 @@ export function AuthProvider({ children }) {
       loading,
       isStaff: user?.role === 'staff',
       isInstructor: user?.role === 'instructor',
+      isMember: user?.role === 'member',
       async login(email, password) {
         const data = await apiLogin(email, password);
+        setUser(data.user);
+        return data.user;
+      },
+      async signup(fullName, email, password) {
+        // Signup auto-authenticates (the backend sets the same session
+        // cookie `login` does) — no separate "log in after signing up" step.
+        const data = await apiSignup(fullName, email, password);
         setUser(data.user);
         return data.user;
       },
