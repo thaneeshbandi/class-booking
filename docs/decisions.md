@@ -481,3 +481,184 @@ backend/src/domain/sessionConflicts.js`), not invented for this file.
   undeletable session blocking that fixture's own cleanup, caught by the full suite failing on an
   unrelated, later test and root-caused by reading this exact file's own established pattern rather than
   inventing a new one.
+
+## Decision 32
+
+- **Chose:** A nullable, unique `user_id` foreign key on `members` (migration `012_members_user_link.js`)
+  as the one and only relationship between a login (`users`) and a booking identity (`members`) —
+  matched at signup time by normalized email, then never revisited.
+- **Rejected:** Merging `users` and `members` into one table; treating `users.email == members.email` as
+  a standing identity relationship, re-derived on every request instead of stored.
+- **Why:** The two tables answer different questions and have different constraints for a reason already
+  documented in `003_members.js` — `members.email` is deliberately *not* unique (a parent's email on two
+  children's memberships), so it can never safely be the join key for anything beyond a one-time lookup.
+  Merging the tables would either force `members.email` unique (breaking that real scenario) or leave a
+  login-shaped row for every staff-created member who never signs up, most of whom never will. The brief
+  itself was explicit here: "DO NOT use email alone as a permanent identity relationship after signup...
+  The actual relationship must be represented by a database foreign key" — this is exactly that. Nullable
+  because most existing `members` rows have no login and that stays true; unique because the invariant is
+  at most one-to-one in both directions, enforced by the database, not application code.
+
+## Decision 33
+
+- **Chose:** When a signup's normalized email matches more than one *unlinked* `members` row (legitimate
+  under Decision 32's own non-unique `members.email`), create a fresh member rather than linking to
+  either candidate.
+- **Rejected:** Linking to the first/oldest/most-recently-created match; linking to whichever row has the
+  furthest-out membership expiry; rejecting the signup outright until staff resolves the ambiguity.
+- **Why:** Guessing which of two (or more) same-email member records a signing-up person meant risks
+  silently attaching a stranger's booking history and membership expiry to the wrong login — the exact
+  failure Decision 32 exists to prevent for the single-match case. Rejecting the signup entirely would
+  punish an ordinary person for a data shape (shared family email) the schema was explicitly designed to
+  allow. A fresh member is the only outcome that never guesses wrong; it costs one duplicate-looking row
+  in an already-rare edge case, recoverable by staff re-pointing `user_id` directly if it ever matters.
+  Covered by `backend/tests/memberLinking.test.js`'s "ambiguous email match" test.
+
+## Decision 34
+
+- **Chose:** `POST /api/auth/signup` links-or-creates the `members` row inside the *same* database
+  transaction as the `users` insert (`domain/memberLinking.js`, called from within `db.transaction`).
+- **Rejected:** Two separate statements/requests (create the user, then separately link/create the
+  member); a background job reconciling unlinked members after signup.
+- **Why:** The brief calls this out directly ("linking is transactional") — a user with no member, or a
+  member linked to a user that doesn't exist, are both states nothing in this application knows how to
+  render or recover from cleanly (the member-portal routes assume every `role: 'member'` user has exactly
+  one linked member). Doing both inside one transaction makes that invariant a database guarantee: either
+  both writes commit or neither does, with no window where a half-created account is visible to a
+  concurrent request.
+
+## Decision 35
+
+- **Chose:** Email is read-only on `/profile` for every role — no `PATCH /api/profile` field for it at
+  all, not merely a disabled input.
+- **Rejected:** A safe email-change flow (verify the new address, then atomically update both `users.email`
+  and any linked `members.email`); allowing the field to be edited freely.
+- **Why:** Email is the account's login identity *and*, since Decision 32, the one-time signal
+  `domain/memberLinking.js` used to find (or not find) a member to claim at signup — a value with real
+  structural weight elsewhere in the schema, not an inert profile field. A verified-email-change flow is a
+  legitimate feature, but it's a second OTP-shaped flow this milestone did not ask for, and skipping
+  verification would let an account silently take over anyone's inbox. The brief's own guidance was
+  explicit about being conservative here ("do not casually allow changing email"); read-only, with the
+  reason stated plainly in the UI (`ProfilePage.jsx`'s field hint), is the smallest safe choice — full
+  email-change is a documented gap, not an oversight (see `docs/architecture.md`, "What was deliberately
+  not built").
+
+## Decision 36
+
+- **Chose:** Changing or resetting a password never invalidates any other active session — the current
+  session (change-password) or the pre-reset session, if one existed (forgot-password), simply continues
+  to work exactly as before, and so does every other device's session token.
+- **Rejected:** A `token_version`/`sessions` table added specifically so a password change could bump a
+  version and invalidate every other outstanding token.
+- **Why:** `auth/tokens.js`'s session token is deliberately stateless — a signed HMAC carrying only a user
+  id, with no server-side session store to revoke against, an explicit prior design choice (see that
+  file's own comment on why role is never embedded in the token, for the same "no stale-state window"
+  reasoning). Adding revocation would mean adding exactly the kind of server-side session state that
+  design exists to avoid, for a milestone whose actual ask was "decide and document," not "add token
+  revocation infrastructure." The accepted tradeoff: an attacker who already has a stolen, valid session
+  token keeps using it until it naturally expires (12 hours) even after the legitimate owner changes their
+  password. This is the simplest behavior consistent with the existing architecture, not the most secure
+  one available in the abstract — a real limitation, recorded here and in `docs/architecture.md` rather
+  than left implicit.
+
+## Decision 37
+
+- **Chose:** Password-reset OTPs are hashed with a keyed HMAC-SHA256 (`auth/otp.js#hashOtp`, keyed with
+  the existing `JWT_SECRET`), not Argon2id — the same algorithm `auth/tokens.js` already uses for signing.
+- **Rejected:** Reusing `hashPassword`/`verifyPassword` (Argon2id) for OTPs too, "for consistency."
+- **Why:** Argon2id's deliberate slowness defends a *password* — high entropy, attacker gets unlimited
+  offline guesses against a stolen hash. A 6-digit OTP has only 1,000,000 possible values and is
+  short-lived by design (`OTP_TTL_MS`, 10 minutes) with a hard attempt cap (`OTP_MAX_ATTEMPTS`, 5) enforced
+  at verification time — the thing actually protecting it is the expiry and the attempt limit, not hash
+  cost, and Argon2id's cost would only slow down the *legitimate* verification request for no real
+  security gain. A keyed HMAC is fast, deterministic (needed for a simple equality check via
+  `crypto.timingSafeEqual`), and reuses the one server-side secret this application already requires
+  rather than inventing a second one — the same "small, dependency-free, `node:crypto`-only" pattern
+  `auth/tokens.js` already established for this codebase.
+
+## Decision 38
+
+- **Chose:** A separate, structurally distinct token type for password-reset (`auth/resetTokens.js`) —
+  same hand-rolled HMAC pattern as `auth/tokens.js`'s session token, but its own encode/verify functions,
+  its own `purpose` claim, and no shared code path with session-token verification.
+- **Rejected:** Reusing `issueSessionToken`/`verifySessionToken` directly for the reset token too (same
+  claim shape, maybe an extra field).
+- **Why:** A session token and a reset token must never be accepted for each other's endpoint — a stolen
+  reset token (10-minute TTL, single specific purpose) is a much smaller blast radius than a stolen
+  session token (12 hours, full account access), and the two should never be interchangeable by
+  construction. Sharing one signing function risks exactly that becoming a one-line mistake later (an
+  endpoint that forgets to check `purpose`, or a claim shape that happens to satisfy both verifiers).
+  Duplicating roughly a dozen lines of HMAC boilerplate is a small, worthwhile price for that confusion
+  being structurally impossible rather than merely disciplined-code-review-dependent.
+
+## Decision 39
+
+- **Chose:** A small, swappable email-provider abstraction (`email/emailService.js`) selected once from
+  `EMAIL_PROVIDER`: a console/dev provider (default outside production, records sent messages in an
+  in-memory array for tests to read) and a generic webhook provider (POSTs `{to, subject, text}` to an
+  operator-configured URL, for a real deployment to point at whatever transactional service it uses).
+- **Rejected:** Integrating a specific vendor SDK (SendGrid/SES/Postmark/etc.) directly; hardcoding SMTP
+  credentials; skipping the abstraction and just logging OTPs everywhere including production.
+- **Why:** No email provider existed anywhere in this codebase before this milestone, and deployment is
+  explicitly out of scope for this submission — there is no real provider account to integrate against or
+  test with. A generic webhook is the smallest interface that is genuinely swappable (any provider can sit
+  behind one) without pretending to have tested a specific vendor integration this project cannot actually
+  exercise. Production refuses to start sending email at all without `EMAIL_PROVIDER` set (`selectProvider`
+  throws rather than silently falling back to the console provider) — a deployment mistake fails loudly
+  instead of quietly leaking OTPs into a production log, which the brief explicitly forbids.
+
+## Decision 40
+
+- **Chose:** `ErrorBanner` (`frontend/src/components/States.jsx`) was redesigned in place — same import,
+  same `{ error, onRetry }` call signature every existing page already uses, now additionally
+  `onDismiss`/`context` — rather than introduced as a new, differently-named component every call site
+  would need to be individually migrated to.
+- **Rejected:** A new `ErrorPanel`/`ErrorAlert` component, adopted page by page; leaving the old raw
+  `{status}: {message}` rendering in place and only fixing the specific login screenshot the brief called
+  out.
+- **Why:** Eleven existing pages already render `<ErrorBanner error={...} onRetry={...} />` for both form
+  submission failures and page-load failures — redesigning the component's *internals* (icon, translated
+  title/message via the new `errorCopy.js`, no raw status prefix) instead of its name means every one of
+  those call sites is upgraded automatically, with zero risk of a page quietly being missed in a manual
+  migration. This is what makes "used consistently across the entire application" true by construction
+  rather than by auditing eleven files by hand. A distinct `PageError` variant (centered icon, headline,
+  Retry) was added alongside it for genuine whole-page load failures, and `FieldError` for the newer
+  multi-field forms (profile, forgot password) — three purpose-built pieces of one shared system, not one
+  component asked to look right in every context.
+
+## Decision 41
+
+- **Chose:** The centralized error-copy mapping (`errorCopy.js`) shows the backend's own message for a
+  409, falling back to a generic "conflicts with the current state" line only when no message is present
+  — a narrower reading of the brief's own example mapping, which listed a single generic 409 string.
+- **Rejected:** Literally always showing the generic mapped text for every 409, matching the brief's
+  example table exactly with no exception.
+- **Why:** Every 409 this backend ever raises is already a specific, hand-authored `BookingError` message
+  — "This member's membership expired on 2024-01-01.", "An account with this email already exists.",
+  "This member already has an active booking for this session." — never a raw database conflict code or
+  constraint name. These are exactly the kind of genuinely useful, human-authored explanations the brief's
+  own validation-message bullet already asks to preserve ("field-specific readable messages"); discarding
+  them in favor of one generic sentence would be a real information loss for the user and would also have
+  broken several already-passing Playwright assertions that check this exact specific text (e.g.
+  `polish.spec.js`'s duplicate-signup-email test). Documented here as the "most defensible interpretation"
+  of an ambiguous instruction, per this project's own stated rule for handling exactly this situation.
+
+## Decision 42 — a fresh signup's starting membership expiry (Later reversed)
+
+- **Chose (first pass):** A brand-new self-registered member (no staff-created record to claim) gets
+  `membership_expires_on` set to the studio's current date (`(now() AT TIME ZONE STUDIO_TIMEZONE)::date`)
+  at signup — "no free membership just for signing up."
+- **Later reversed to:** `membership_expires_on` set to *yesterday* (studio time) —
+  `(now() AT TIME ZONE STUDIO_TIMEZONE)::date - 1`.
+- **Why reversed:** `domain/membership.js#isMembershipExpired` is a strict `<` comparison — "an expiry
+  date equal to today is still valid, the member has until the end of that civil day" (that file's own
+  comment, an existing and correct rule for a staff-set expiry). Setting a fresh signup's expiry to
+  *today* therefore left it genuinely bookable for the rest of that day: a real, if short-lived, free
+  membership — exactly the outcome the first pass was trying to avoid, just delayed by one civil day
+  rather than prevented. This was not caught by any automated test (every backend test that checked this
+  used `grantMembership` with an explicit, obviously-expired date, never a truly fresh signup) — it was
+  caught during this milestone's own required visual QA pass, reading the member home page's rendered
+  membership badge at `375px`/`1440px` and noticing it read "Expiring soon" for an account that had
+  supposedly never been granted any membership at all. Fixed in `domain/memberLinking.js`, and a new
+  backend test (`tests/memberPortal.test.js`, "rejects a new booking for a brand-new signup that was never
+  granted a real membership") added specifically to close the gap the first pass's own test suite missed.

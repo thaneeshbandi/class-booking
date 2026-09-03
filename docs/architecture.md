@@ -1,11 +1,13 @@
 # Architecture
 
-This describes the system as it actually stands after all ten mandatory goals and the frontend that
-consumes them: accounts and roles, classes, sessions, the booking lifecycle with immutable history,
+This describes the system as it actually stands after all ten mandatory goals, the frontend that
+consumes them, and a later milestone that turned the public signup flow into a real member self-service
+product: accounts and roles, classes, sessions, the booking lifecycle with immutable history,
 co-instructors, server-side booking search/filter/sort/pagination, recurring session generation with
-attendance CSV export, the staff-only dashboard, expiring membership alerts, and a React/Vite
-browser-side app for all of it. Only the optional stretch ideas remain — see "What was deliberately
-not built" below.
+attendance CSV export, the staff-only dashboard, expiring membership alerts, account/member linking, a
+member portal (browse/book/cancel/view own bookings), a profile page for every role, forgot-password by
+email OTP, and a reusable error-presentation system — all served by a React/Vite browser-side app. Only
+the optional stretch ideas beyond that remain — see "What was deliberately not built" below.
 
 ## Moving pieces
 
@@ -401,15 +403,107 @@ filtered against**, not a second, separately-sourced "now" — `listExpiringMemb
 reusing `isMembershipExpired` (already existed, from goal 4's booking-eligibility rule) rather than
 re-expressing the same "expiry < today" comparison a second time.
 
+## Account/member linking, the member portal, profile, and forgot-password
+
+A later milestone (after the visual redesign) turned the public `member` account from Decision 26 into a
+real product: an account that can claim a staff-created member record, browse and book real sessions,
+manage its own profile, and recover a forgotten password — while every existing staff/instructor
+capability and authorization boundary stays exactly as it was.
+
+**Account/member linking.** `users` (login identity) and `members` (booking identity) stay two separate
+tables — see `docs/schema.md`'s "Data source of truth" section for why merging them was rejected. What's
+new is `members.user_id` (migration `012`, nullable, unique), the one-time relationship a signup
+establishes: `POST /api/auth/signup` normalizes the submitted email, and inside one transaction
+(`domain/memberLinking.js`, called from `routes/auth.js`) either links the new user to the single
+matching *unlinked* `members` row (staff-maintained data — name, expiry, every existing booking —
+untouched) or creates a fresh member if none matches (or more than one ambiguously does). See
+`docs/decisions.md`, Decisions 32–34, and `backend/tests/memberLinking.test.js` for the full set of
+scenarios this is tested against, including the deliberately-reversed starting-expiry bug documented in
+Decision 42.
+
+**The member portal** (`GET /api/member/sessions`, `GET/POST /api/member/bookings`,
+`POST /api/member/bookings/:id/cancel`, `routes/memberBookings.js`) is `requireRole('member')` end to
+end, and never accepts a `member_id`/`memberId` from the client — every route derives the caller's own
+member row from `members.user_id = req.user.id` first. Creation and cancellation call straight into
+`domain/bookingTransaction.js#createBookingInTransaction`/`cancelBookingInTransaction` — the exact
+functions the staff-only `routes/bookings.js` now also calls (both routes were refactored onto this
+shared pair specifically so the two could never diverge on capacity, waitlist FIFO promotion, or
+membership-expiry rules; see Decision 34's neighbors and `bookingTransaction.js`'s own comments). There is
+only one implementation of "can this booking happen" in the whole application.
+
+**Profile** (`GET/PATCH /api/profile`, `POST /api/profile/change-password`, `routes/profile.js`) is
+available to every authenticated role — the same `authenticate` middleware every other route uses, no
+role check beyond that, since editing your own name/password is not a privileged action. `role` is never
+a field on any request this router accepts, at any point — the same "not a field at all" pattern
+`signupSchema` already established. Email is read-only (Decision 35). Changing a password re-verifies the
+current one (timing-safe against a non-existent-row dummy hash, the same pattern `routes/auth.js#login`
+uses), then updates the Argon2id hash atomically; the current session — and every other active session —
+stays valid, a deliberate, documented tradeoff of the stateless token architecture (Decision 36).
+
+**Forgot password by email OTP** — `POST /api/auth/forgot-password/{request,verify,reset}` — is the
+milestone's own representative request path, end to end:
+
+1. `POST /forgot-password/request { email }` normalizes the email and looks up a matching, active user.
+   If found *and* not within the request cooldown (`OTP_REQUEST_COOLDOWN_MS`, `auth/otp.js`), a
+   cryptographically random 6-digit code (`crypto.randomInt`) is generated, hashed (keyed HMAC-SHA256,
+   Decision 37) and inserted into `password_reset_otps`, and `email/emailService.js#sendOtpEmail` is
+   called. **Every code path returns the identical generic response** — whether the email exists, doesn't
+   exist, is inactive, or is mid-cooldown — so this endpoint can never be used to enumerate accounts.
+2. `POST /forgot-password/verify { email, otp }` re-derives the user, locks and reads that user's *newest*
+   `password_reset_otps` row (`FOR UPDATE`), and rejects (generic "invalid or expired" message, no detail
+   on which check failed) if it's missing, expired, already consumed, over its attempt limit, or the
+   submitted code doesn't match (timing-safe comparison) — incrementing `attempts` on a wrong guess.
+   Success marks `verified_at` and returns a short-lived, purpose-scoped reset token
+   (`auth/resetTokens.js`, Decision 38) binding this exact OTP row.
+3. `POST /forgot-password/reset { resetToken, newPassword, confirmNewPassword }` verifies that token,
+   re-confirms the referenced OTP row is still valid and *was* verified, hashes the new password, marks
+   the OTP `consumed_at`, and updates `users.password_hash` — all inside one transaction.
+
+The dev/test email adapter (`email/emailService.js`'s console provider, plus the dev-only
+`GET /api/auth/forgot-password/dev/last-otp` route in `routes/auth.js`, registered **only** when
+`NODE_ENV !== 'production'`) is what lets both the backend test suite (importing `sentEmails` directly —
+tests run in-process) and Playwright (a separate process, hitting that HTTP route) retrieve a real,
+freshly-generated OTP without ever calling a real email provider. See Decision 39 for the swappable
+provider abstraction itself.
+
+**The error-presentation system** (`frontend/src/components/errorCopy.js` + `States.jsx`) is what
+replaced the raw `{status}: {message}` rendering every page previously inherited from `ErrorBanner`.
+`errorCopy.js#describeError` is the single place an `ApiError` (or a bare network failure) is translated
+into a `{title, message}` a user should actually read — never a raw status prefix, and never a database
+error, since none of that ever reaches the client to begin with (`app.js`'s catch-all 500 handler already
+strips it). `ErrorBanner` itself was redesigned in place, not replaced with a new component every one of
+the eleven pages that already imported it would need migrating to (Decision 40) — so the same
+`<ErrorBanner error={...} onRetry={...} />` call every page already had now renders an icon, a translated
+title/message, an optional Retry, and (new) an optional Dismiss, with `role="alert"` for every one of
+them. `PageError` (a centered, whole-page variant) and `FieldError` (inline, per-field) round out the
+three shapes the milestone's brief asked for, used by the new member-portal/profile/forgot-password pages.
+
 ## What was deliberately not built, and why
 
-- **Self-service booking for a signed-up member.** `POST /api/auth/signup` (added during the
-  frontend-polish milestone, after all ten mandatory goals) creates a real, authenticated `member`-role
-  account, but that account can browse or book nothing — it lands on a small static page saying so
-  (`WelcomePage.jsx`). "Online self-service booking for members" is one of `README.md`'s own stretch
-  ideas; building the actual booking experience was out of scope for what was asked (a signup *flow*,
-  not that feature), and a page that plainly says there's nothing to do yet is more honest than one that
-  implies a capability that was never built — see `docs/decisions.md`, Decisions 26–27.
+- **Self-service booking for a signed-up member — now built.** A later milestone (see the
+  "Account/member linking..." section above) replaced the old static `WelcomePage.jsx` placeholder with
+  a real member portal: browse sessions, book, view own bookings, cancel. Superseded here rather than
+  deleted from this document, since Decisions 26–27 (why it was deliberately deferred at the time) are
+  still accurate history of what this codebase actually did, in order.
+- **A verified email-change flow.** Email is read-only on `/profile` for every role (Decision 35) — a
+  safe, OTP-verified change-of-email flow is a legitimate feature this milestone's brief explicitly
+  flagged as risky to build casually, and building it correctly would mean a second OTP-shaped flow this
+  milestone did not ask for. The gap is documented, not silent.
+- **Session revocation on password change.** `auth/tokens.js`'s session token remains a bare, stateless
+  HMAC with no server-side revocation list — changing or resetting a password never invalidates any
+  *other* active session or device, only the credential needed to start a new one. Adding revocation
+  would mean adding exactly the kind of server-side session state that token's own design deliberately
+  avoids; the accepted tradeoff is documented, not silent — see Decision 36.
+- **Real transactional email delivery.** `email/emailService.js`'s webhook provider is genuinely
+  swappable (any provider can sit behind a generic POST), but no real provider account exists to
+  integrate against or test — deployment itself is out of scope for this submission (see
+  `SUBMISSION.md`). Production is configured to *refuse to start sending email at all* rather than
+  silently fall back to logging, so this is a documented configuration requirement for a real deploy, not
+  a working integration this repository has actually exercised.
+- **Periodic cleanup of expired `password_reset_otps` rows.** See `docs/schema.md`'s "what would break
+  first at 100x" — correctness never depends on old rows being pruned (every read filters on
+  `expires_at`/`consumed_at`/`attempts`), so this is a real but non-urgent maintenance task, not a
+  design gap.
 - **A frontend client-side cache (React Query, Redux, or similar).** Every mutation is followed by a
   plain re-fetch of the affected list; at this scale (a handful of pages, no offline requirement, no
   optimistic-update need the brief asks for) that is simpler to read, simpler to get right, and never

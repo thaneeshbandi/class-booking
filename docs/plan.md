@@ -18,7 +18,8 @@ happened, not a retrofit.
 | 9 | 2026-09-02, later still | The frontend — a React/Vite app covering every mandatory-goal workflow, two small backend additions it genuinely needed (CORS, room/instructor listing), a real cross-origin CSV-download bug found and fixed, and this documentation update. |
 | 10 | 2026-09-02, later still | Automated browser E2E verification with Playwright — real Chromium driving the actual running frontend and backend; one genuine responsive-layout bug and one genuine pagination bug found and fixed along the way; this documentation update. |
 | 11 | 2026-09-02, later still | Final frontend UI/UX polish — a full visual redesign, a fixed booking-table action column, a client-side recurring-generation UX pass, and a new public signup flow (migration 011, `POST /api/auth/signup`), each with new Playwright coverage; this documentation update. |
-| 12 (this one) | 2026-09-03 | Full frontend visual redesign — design tokens, a hand-rolled icon set, a redesigned app shell with a real mobile drawer, split-screen auth pages, and every page rebuilt on the new component set; one small backend addition (`bookedCount` on `GET /api/sessions`); this documentation update. |
+| 12 | 2026-09-03 | Full frontend visual redesign — design tokens, a hand-rolled icon set, a redesigned app shell with a real mobile drawer, split-screen auth pages, and every page rebuilt on the new component set; one small backend addition (`bookedCount` on `GET /api/sessions`); this documentation update. |
+| 13 (this one) | 2026-09-03 | Account/member linking (migration 012), a member portal (browse/book/cancel, reusing the existing booking domain logic), a profile page for every role, forgot-password by email OTP (migration 013), and a reusable error-presentation system replacing raw `{status}: {message}` everywhere; this documentation update. |
 
 Session 2's five foundation commits share one timestamp to the minute in `git log`, which is a real
 gap in this record: they clearly did not all land in the same sixty seconds, and no finer-grained
@@ -591,6 +592,90 @@ recurring sessions, members, alerts, session detail, signup, plus booking detail
 columns) scrolls only within its own `.table-scroll` container — zero page-level horizontal overflow —
 rather than dragging the whole page sideways.
 
+## Session 13 — account/member linking, member portal, profile, forgot-password, error-presentation system
+
+Read in order before changing anything, matching the milestone's own explicit audit-first instruction:
+`backend/src/routes/auth.js`, `bookings.js`, `members.js`; `backend/src/auth/{password,tokens,cookies}.js`
+and `middleware/{authenticate,authorize,sessionAccess}.js`; `backend/migrations/002_users.js` and
+`003_members.js` (specifically to confirm `members.email` is deliberately non-unique, the single most
+load-bearing fact for how account linking could safely work at all); `backend/src/domain/
+bookingTransaction.js`, `bookingTiming.js`, `bookingTransitions.js`, `membership.js`; the full frontend
+`AuthContext.jsx`, `App.jsx`, `AppShell.jsx`, `components/States.jsx`, `api/client.js`; and a grep across
+`backend/src/` for any existing email/OTP/rate-limiting code (none — confirmed the entire email/OTP
+subsystem had to be built from nothing, not adapted from something already there).
+
+Implementation order: schema first (`012_members_user_link.js`, `013_password_reset_otps.js`, applied and
+`schema.test.js` updated for the new table/columns before writing anything that depended on them); then
+backend domain/auth primitives with no route yet attached (`domain/memberLinking.js`, `auth/otp.js`,
+`auth/resetTokens.js`, `email/emailService.js`) — small, independently reasoned-about pieces before
+wiring them into HTTP; then the signup rework and the three forgot-password routes in `routes/auth.js`;
+then `routes/profile.js`; then the booking-domain-logic extraction (`createBookingInTransaction`/
+`cancelBookingInTransaction` pulled out of the existing staff `routes/bookings.js` handlers, that route
+re-verified against the full existing suite before writing a single line of the new member route) and
+`routes/memberBookings.js` built on those same two functions; backend tests were written and run
+file-by-file as each piece landed, not batched to the end. Only once the whole backend surface was
+green did the frontend start: the error-presentation system first (`errorCopy.js`, the `States.jsx`
+rewrite) since every later page would use it; then the five new/replaced pages; then `AppShell`/`App.jsx`
+routing; then the two new Playwright spec files plus the necessary updates to three existing ones for the
+redesign's intentional copy/route changes; then the required screenshot-based visual QA pass, which is
+what caught the Session's one real bug (see below); then documentation; then the single commit.
+
+### What was correct
+
+The transactional link-or-create design, the ambiguous-multiple-match fallback, the OTP security model
+(hashed storage, expiry, attempt limit, request cooldown, generic anti-enumeration response), reusing the
+exact booking-domain functions between staff and member routes, and redesigning `ErrorBanner` in place
+rather than as a new component every page would need migrating to — all worked as designed the first
+time, verified by the new test suites rather than merely asserted. See `docs/ai-prompts.md`'s account of
+this session for the full "what was correct" detail.
+
+### What was wrong, and what was corrected
+
+One real product bug and several test-authoring mistakes, every one caught by actually running the
+required verification rather than assumed clean — full detail for each is in `docs/ai-prompts.md`'s
+account of this session:
+
+1. A fresh, unlinked signup's starting membership expiry was set to *today*, which — because
+   `isMembershipExpired` is a strict `<` — left it bookable for the rest of that day, a real (if
+   short-lived) free membership. Not caught by any test (every existing expired-membership test used an
+   explicit, obviously-past date); caught by actually reading the member home page's rendered membership
+   badge during the required screenshot review. Fixed to yesterday's date instead, with a new backend
+   test added to close the coverage gap the first pass's own suite had missed — documented as a reversed
+   decision (`docs/decisions.md`, Decision 42), the one required "later reversed" entry for this project.
+2. The redesigned error copy intentionally broke three pre-existing Playwright assertions pinned to the
+   old raw text/old placeholder page (a login-failure message, a raw `'403'` substring, and the old static
+   `WelcomePage`'s heading/nav) — all three were the *intended* consequence of the redesign, fixed by
+   updating the assertions to match the new, correct behavior, not by watering down the redesign.
+3. A new backend test file's cleanup hook tried to delete fixtures that had become permanently
+   undeletable (a member who booked and cancelled writes `booking_events` rows referencing their own,
+   now-`RESTRICT`-protected user id) — the failed delete threw before the server/DB connection were ever
+   closed, hanging the test process indefinitely. Root-caused by checking for a stuck database query first
+   (there wasn't one) before concluding it was a leaked resource, and fixed by adopting this project's own
+   already-established "unique per run, never cleaned up" fixture pattern instead of forcing the delete.
+4. Several Playwright locator ambiguities in the two new spec files (a "New password" field matching
+   both itself and "Confirm new password"; a sidebar "My Bookings"/"Profile" link matching a same-named
+   quick-action button on the member home page; a dev-OTP fetch racing the request it was meant to read
+   the result of) — all caught by the suite actually failing with a strict-mode violation or a timeout,
+   all fixed by scoping the locator or adding the missing wait, none a product bug.
+
+### Verification
+
+What was actually run, in order: backend `npm test --test-concurrency=1` (449 tests passing, 1 skipped —
+the same `APP_DB_URL`-gated schema test, skipped whenever that optional role isn't configured, same as
+every earlier session) and `npm run lint`, both clean, run twice consecutively; frontend `npm run lint`
+and `npm run build`, both clean; the full Playwright suite (`npx playwright test`, 63 tests — 41
+pre-existing plus 22 new across `member-portal.spec.js` and `account-security.spec.js`, plus one new test
+added to `responsive.spec.js`'s existing parametrized viewport loop), run twice consecutively, both times
+63/63 clean; a fresh `npm run db:reset` (cleanly applying all 13 migrations from zero and re-seeding),
+followed by the backend suite once more (450 tests, 449 passing, 1 skipped — identical shape) and `npm run
+lint` (clean) against the fresh database, then the full Playwright suite once more (63/63, clean) against
+it. A genuine screenshot-based visual QA pass followed, via a throwaway script (not committed) driving a
+real Chromium browser at 375px/768px/1024px/1440px across every page this milestone's own instructions
+named by name (Login, Signup, Forgot Password at both its email and OTP steps plus an error state,
+Dashboard, Member Home, Member Sessions, My Bookings, Profile for a member and for staff, Classes,
+Bookings, Recurring Sessions, and the redesigned login error state) — this is what caught the membership-
+expiry bug above; a second pass confirmed the fix.
+
 ## What was cut
 
 Nothing was cut from goal 4's own scope — all eight specified phases, including the full required
@@ -626,3 +711,14 @@ members" stretch idea listed in `README.md`, not that stretch idea itself: a sig
 in and out, but there is still no booking capability for them anywhere in the product (see Decision 27,
 and `docs/architecture.md`'s "What was deliberately not built" section). No stretch idea is complete,
 and `SUBMISSION.md` says so plainly rather than letting a working signup form read as more than it is.
+
+Session 13 closed that gap: a signed-up member can now actually browse and book real sessions, view and
+cancel their own bookings, and self-service booking is genuinely built, not merely infrastructure toward
+it (see Session 13 above, and `docs/architecture.md`'s "What was deliberately not built" section, updated
+to reflect this). Nothing from that session's own instructions was cut — every numbered requirement
+(account linking, the member portal, profile for every role, forgot-password by OTP, and the
+error-presentation system) landed and is tested. What remains deliberately unbuilt going into this
+milestone, each a documented, bounded gap rather than a silent omission: a verified email-change flow,
+session revocation on password change, and integration with a real (as opposed to swappable-but-
+unexercised) transactional email provider — see `docs/architecture.md` for why each was set aside and
+`SUBMISSION.md` for what a next iteration would prioritize.

@@ -138,7 +138,11 @@ test.describe.serial('instructor — authorization boundaries', () => {
     await page.goto(`/sessions/${foreignSessionId}`);
     const alert = page.getByRole('alert');
     await expect(alert).toBeVisible();
-    await expect(alert).toContainText('403');
+    // The polished error system never shows a raw status number — the
+    // backend's 403 is translated to this friendly, specific message (see
+    // `components/errorCopy.js`).
+    await expect(alert).toContainText(/don't have permission/i);
+    await expect(alert).not.toContainText('403');
   });
 
   test('direct navigation to every staff-only URL redirects back to /sessions', async () => {

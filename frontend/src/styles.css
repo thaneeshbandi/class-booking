@@ -537,6 +537,22 @@ textarea:focus-visible,
   margin-bottom: var(--space-4);
 }
 
+.forgot-password-link {
+  text-align: right;
+  margin: -8px 0 var(--space-4);
+  font-size: 12.5px;
+}
+
+.forgot-password-link a {
+  color: var(--color-text-muted);
+  text-decoration: none;
+}
+
+.forgot-password-link a:hover {
+  text-decoration: underline;
+  color: var(--color-primary);
+}
+
 .auth-footer {
   margin-top: var(--space-5);
   padding-top: var(--space-4);
@@ -553,6 +569,27 @@ textarea:focus-visible,
 
 .auth-footer a:hover {
   text-decoration: underline;
+}
+
+/* A text-only "act like a link" button — the resend-code action on the
+   forgot-password flow, styled to match `.auth-footer a` exactly. */
+.link-button {
+  background: none;
+  border: none;
+  padding: 0;
+  font: inherit;
+  font-weight: 600;
+  color: var(--color-primary);
+  cursor: pointer;
+}
+
+.link-button:hover:not(:disabled) {
+  text-decoration: underline;
+}
+
+.link-button:disabled {
+  color: var(--color-text-faint);
+  cursor: default;
 }
 
 @media (max-width: 860px) {
@@ -645,12 +682,140 @@ textarea:focus-visible,
   grid-template-columns: repeat(auto-fit, minmax(320px, 1fr));
   gap: var(--space-5);
   align-items: stretch;
+  margin-bottom: var(--space-5);
 }
 
 .dashboard-grid .card {
   margin-bottom: 0;
   display: flex;
   flex-direction: column;
+}
+
+/* --- profile page ------------------------------------------------------ */
+
+.profile-header {
+  display: flex;
+  align-items: center;
+  gap: var(--space-4);
+}
+
+.profile-header h1 {
+  margin: 0 0 4px;
+}
+
+.profile-account-details {
+  display: grid;
+  grid-template-columns: max-content 1fr;
+  gap: var(--space-2) var(--space-4);
+  margin: 0;
+}
+
+.profile-account-details dt {
+  color: var(--color-text-muted);
+  font-size: 12.5px;
+  font-weight: 600;
+}
+
+.profile-account-details dd {
+  margin: 0;
+}
+
+.field-hint {
+  margin: -8px 0 var(--space-3);
+  font-size: 12.5px;
+  color: var(--color-text-muted);
+}
+
+/* --- member portal ------------------------------------------------------ */
+
+.membership-summary {
+  display: flex;
+  flex-direction: column;
+  align-items: flex-start;
+  gap: var(--space-2);
+  margin-bottom: var(--space-3);
+}
+
+.membership-summary p {
+  margin: 0;
+}
+
+.quick-actions {
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-3);
+}
+
+.member-booking-list {
+  list-style: none;
+  margin: 0;
+  padding: 0;
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-3);
+}
+
+.member-booking-row {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: var(--space-3);
+  padding: var(--space-3) var(--space-4);
+  border: 1px solid var(--color-border);
+  border-radius: var(--radius-sm);
+}
+
+.member-booking-class {
+  font-weight: 600;
+}
+
+.member-session-grid {
+  display: grid;
+  grid-template-columns: repeat(auto-fill, minmax(280px, 1fr));
+  gap: var(--space-4);
+}
+
+.member-session-card {
+  margin-bottom: 0;
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-3);
+}
+
+.member-session-card-header {
+  display: flex;
+  align-items: flex-start;
+  justify-content: space-between;
+  gap: var(--space-3);
+}
+
+.member-session-card-header h3 {
+  margin: 0;
+  font-size: 15px;
+}
+
+.member-session-meta {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+  font-size: 13px;
+  color: var(--color-text-muted);
+}
+
+.member-session-meta span {
+  display: flex;
+  align-items: center;
+  gap: 7px;
+}
+
+.member-session-card-footer {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: var(--space-3);
+  margin-top: auto;
+  padding-top: var(--space-3);
+  border-top: 1px solid var(--color-border);
 }
 
 .dashboard-alert-banner {
@@ -1433,6 +1598,73 @@ a.metadata-chip:hover {
 .state-error {
   background: var(--color-error-bg);
   border-color: var(--color-error-border);
+  color: var(--color-error-text);
+}
+
+.state-error-actions {
+  display: flex;
+  align-items: center;
+  gap: var(--space-2);
+  flex-shrink: 0;
+}
+
+.state-error-dismiss {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 26px;
+  height: 26px;
+  border-radius: var(--radius-sm);
+  border: none;
+  background: transparent;
+  color: inherit;
+  cursor: pointer;
+  opacity: 0.7;
+}
+
+.state-error-dismiss:hover {
+  opacity: 1;
+  background: rgba(0, 0, 0, 0.05);
+}
+
+/* Page-level failure: a whole page's content depends on one request that
+   failed — centered icon, headline, explanation, a prominent Retry. */
+.state-page-error {
+  flex-direction: column;
+  text-align: center;
+  gap: var(--space-2);
+  padding: var(--space-6) var(--space-4);
+  background: var(--color-surface);
+  border: 1px solid var(--color-border);
+}
+
+.state-page-error-icon {
+  width: 48px;
+  height: 48px;
+  border-radius: 50%;
+  background: var(--color-error-bg);
+  color: var(--color-danger);
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  margin-bottom: var(--space-1);
+}
+
+.state-page-error h2 {
+  margin: 0;
+  font-size: 16px;
+}
+
+.state-page-error p {
+  margin: 0 0 var(--space-2);
+  color: var(--color-text-muted);
+  font-size: 13.5px;
+}
+
+/* Inline, field-level error text — sits directly under one form field. */
+.field-error {
+  margin: 4px 0 0;
+  font-size: 12.5px;
   color: var(--color-error-text);
 }
 

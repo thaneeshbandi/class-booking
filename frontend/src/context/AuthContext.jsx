@@ -69,6 +69,12 @@ export function AuthProvider({ children }) {
           setUser(null);
         }
       },
+      // Lets the profile page reflect a saved name change immediately (the
+      // sidebar/topbar avatar and name), without a second round trip to
+      // `GET /api/auth/me` — the PATCH response already has the new value.
+      updateLocalUser(patch) {
+        setUser((current) => (current ? { ...current, ...patch } : current));
+      },
     }),
     [user, loading],
   );

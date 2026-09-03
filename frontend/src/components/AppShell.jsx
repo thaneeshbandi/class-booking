@@ -21,19 +21,25 @@ const STAFF_LINKS = [
   { to: '/classes', label: 'Classes', icon: 'classes' },
   { to: '/sessions', label: 'Sessions', icon: 'sessions' },
   { to: '/bookings', label: 'Bookings', icon: 'bookings' },
+  { to: '/profile', label: 'Profile', icon: 'users' },
 ];
 
 const INSTRUCTOR_LINKS = [
   { to: '/sessions', label: 'My Sessions', icon: 'sessions' },
   { to: '/bookings', label: 'Bookings', icon: 'bookings' },
+  { to: '/profile', label: 'Profile', icon: 'users' },
 ];
 
-// A signed-up `member` account has no elevated access anywhere in the API
-// (see migration 011) and no self-service feature has been built yet, so
-// there is nothing to link to beyond its own welcome page — an honest
-// reflection of what the account can actually do, not a placeholder for
-// admin views it would only see empty.
-const MEMBER_LINKS = [{ to: '/welcome', label: 'Home', icon: 'home' }];
+// A `member` account's own portal: browse sessions, its own bookings, and
+// its profile — never a staff/instructor view. The backend enforces this
+// boundary independently on every request (see `routes/memberBookings.js`);
+// this list is a navigation convenience only.
+const MEMBER_LINKS = [
+  { to: '/member', label: 'Home', icon: 'home', end: true },
+  { to: '/member/sessions', label: 'Sessions', icon: 'sessions' },
+  { to: '/member/bookings', label: 'My Bookings', icon: 'bookings' },
+  { to: '/profile', label: 'Profile', icon: 'users' },
+];
 
 /** A short, human page label for the topbar's context slot — matched by
  * longest prefix so `/sessions/123` still reads as "Sessions". Purely a
@@ -46,7 +52,10 @@ const PAGE_LABELS = [
   ['/sessions/recurring', 'Generate recurring sessions'],
   ['/sessions', 'Sessions'],
   ['/bookings', 'Bookings'],
-  ['/welcome', 'Home'],
+  ['/profile', 'Profile'],
+  ['/member/sessions', 'Sessions'],
+  ['/member/bookings', 'My Bookings'],
+  ['/member', 'Home'],
 ];
 
 function pageLabelFor(pathname) {
@@ -63,6 +72,7 @@ function NavLinks({ links, alertCount, onNavigate }) {
         <NavLink
           key={link.to}
           to={link.to}
+          end={link.end}
           onClick={onNavigate}
           className={({ isActive }) => `sidebar-link${isActive ? ' active' : ''}`}
         >

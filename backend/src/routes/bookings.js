@@ -2,14 +2,13 @@ import { Router } from 'express';
 import { z } from 'zod';
 
 import { BookingError } from '../domain/bookingErrors.js';
-import { assertCancellable, assertSettleable } from '../domain/bookingTransitions.js';
-import { assertCanCancel, assertCanCreate, assertCanSettle } from '../domain/bookingTiming.js';
-import { isMembershipExpired } from '../domain/membership.js';
+import { assertSettleable } from '../domain/bookingTransitions.js';
+import { assertCanSettle } from '../domain/bookingTiming.js';
 import {
-  countOccupiedSeats,
+  cancelBookingInTransaction,
+  createBookingInTransaction,
   loadBookingForUpdate,
   lockSessionForBooking,
-  promoteWaitlistFIFO,
   translateBookingPgError,
   writeBookingEvent,
 } from '../domain/bookingTransaction.js';
@@ -285,47 +284,11 @@ router.post('/', authenticate, requireRole('staff'), async (req, res, next) => {
 
     const bookingId = await db.transaction(async (trx) => {
       await trx.raw("SET LOCAL lock_timeout = '3s'");
-      const session = await lockSessionForBooking(trx, sessionId);
-      if (!session) {
-        throw new BookingError(404, 'Session not found.');
-      }
-      assertCanCreate({ hasStarted: session.hasStarted });
-
-      const member = await trx('members').where({ id: memberId }).first();
-      if (!member) {
-        throw new BookingError(400, 'Unknown member id.');
-      }
-      if (isMembershipExpired(member.membership_expires_on, session.studioToday)) {
-        throw new BookingError(
-          409,
-          `This member's membership expired on ${member.membership_expires_on}.`,
-        );
-      }
-
-      const existingActive = await trx('bookings')
-        .where({ session_id: sessionId, member_id: memberId })
-        .whereIn('status', ['booked', 'waitlisted'])
-        .first();
-      if (existingActive) {
-        throw new BookingError(
-          409,
-          'This member already has an active booking for this session.',
-        );
-      }
-
-      const occupied = await countOccupiedSeats(trx, sessionId);
-      const status = occupied < session.capacity ? 'booked' : 'waitlisted';
-
-      const [booking] = await trx('bookings')
-        .insert({ session_id: sessionId, member_id: memberId, status })
-        .returning('id');
-      await writeBookingEvent(trx, {
-        bookingId: booking.id,
-        eventType: 'created',
-        toStatus: status,
+      return createBookingInTransaction(trx, {
+        sessionId,
+        memberId,
         actorUserId: req.user.id,
       });
-      return booking.id;
     });
 
     const booking = await fetchBookingWithMember(bookingId);
@@ -358,56 +321,13 @@ router.post('/:bookingId/cancel', authenticate, requireRole('staff'), async (req
     }
     const bookingId = idResult.data;
 
-    // An unlocked peek only to discover which session to lock; every
-    // decision below re-reads the booking under that session's lock.
-    const peek = await db('bookings').where({ id: bookingId }).first('session_id');
-    if (!peek) {
-      return res.status(404).json({ error: 'Booking not found.' });
-    }
-
     const { promotedIds } = await db.transaction(async (trx) => {
       await trx.raw("SET LOCAL lock_timeout = '3s'");
-      const session = await lockSessionForBooking(trx, peek.session_id);
-      const booking = await loadBookingForUpdate(trx, bookingId);
-      if (!booking) {
-        throw new BookingError(404, 'Booking not found.');
-      }
-
-      assertCancellable(booking.status);
-      assertCanCancel({ hasStarted: session.hasStarted });
-
-      const wasBooked = booking.status === 'booked';
-      await trx('bookings')
-        .where({ id: booking.id })
-        .update({ status: 'cancelled', updated_at: trx.fn.now() });
-      await writeBookingEvent(trx, {
-        bookingId: booking.id,
-        eventType: 'status_changed',
-        fromStatus: booking.status,
-        toStatus: 'cancelled',
+      return cancelBookingInTransaction(trx, {
+        bookingId,
         actorUserId: req.user.id,
+        note: parsed.data.note,
       });
-      if (parsed.data.note) {
-        await writeBookingEvent(trx, {
-          bookingId: booking.id,
-          eventType: 'note',
-          note: parsed.data.note,
-          actorUserId: req.user.id,
-        });
-      }
-
-      let promoted = [];
-      if (wasBooked) {
-        const occupied = await countOccupiedSeats(trx, session.id);
-        const freeSeats = session.capacity - occupied;
-        promoted = await promoteWaitlistFIFO(trx, {
-          sessionId: session.id,
-          freeSeats,
-          actorUserId: req.user.id,
-          causedByBookingId: booking.id,
-        });
-      }
-      return { promotedIds: promoted.map((row) => row.id) };
     });
 
     const [booking, promoted] = await Promise.all([

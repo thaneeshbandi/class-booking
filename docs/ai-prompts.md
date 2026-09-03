@@ -786,3 +786,107 @@ Playwright re-run — not assumed away:
    `sessions.test.js`'s own P6 describe block already has a comment warning against. Root-caused by
    reading that comment (not by trial and error) and fixed the same way that block already does: a
    dedicated, never-cleaned-up class and room for the one test that needs a real, permanent booking.
+
+## Account/member linking, member portal, profile, forgot-password, and the error-presentation system
+
+### Prompt
+
+One very long, highly specific instruction given at the start of this session, opening with an explicit
+audit-first requirement ("Before changing anything, inspect: users table/schema, members table/schema,
+authentication middleware, password hashing, JWT/session cookie implementation, auth routes,
+authorization middleware, AuthContext, all existing frontend routes...") and a hard constraint stated in
+capitals: "DO NOT use email alone as a permanent identity relationship after signup... The actual
+relationship must be represented by a database foreign key." In substance: design the smallest safe
+schema change linking a login (`users`) to a booking identity (`members`), so that a staff-created member
+signing up later with the same email is *linked* to their existing record — never duplicated, never
+losing their existing bookings or membership expiry; a genuinely new signup gets its own member with role
+hardcoded to `member`, no client-controllable role field anywhere; build a full member portal (browse
+sessions, book, view own bookings, cancel — reusing the existing booking domain logic exactly, never a
+second implementation) with server-derived member identity, never a client-supplied member id; a profile
+page for every role (name editable, password changeable with an explicit documented decision on session
+invalidation, email deliberately conservative about whether to allow changing it, role never exposed as
+editable); forgot-password by email OTP with an extensive, explicit security spec (cryptographically
+random, hashed storage only, expiry, attempt limits, request cooldown, generic response regardless of
+account existence, a test/dev email adapter for automated tests — never a real provider call); and a
+"reusable error presentation system" replacing the literal complaint "401: Invalid email or password."
+with icon+title+message+retry, applied consistently everywhere, with a centralized status-to-copy
+mapping. It closed with an extensive, itemized testing/verification/documentation/git checklist (backend
+tests run twice plus after a fresh `db:reset`, frontend lint/build, Playwright run twice, real screenshots
+actually inspected at 375/768/1024/1440px with a genuine refinement pass, all six `docs/*.md` files plus
+`SUBMISSION.md` updated honestly, one single incremental commit) and an explicit instruction not to
+deploy.
+
+### What was produced
+
+Two new migrations (`012_members_user_link.js`, `013_password_reset_otps.js`); `domain/memberLinking.js`
+(the link-or-create decision, called transactionally from a reworked `POST /api/auth/signup`);
+`auth/otp.js` and `auth/resetTokens.js` (OTP generation/hashing and a purpose-scoped reset token,
+deliberately not sharing code with the session-token signer — see `docs/decisions.md`, Decision 38);
+`email/emailService.js` (a swappable provider abstraction plus a dev/test adapter); three new auth routes
+(`forgot-password/{request,verify,reset}`) plus a dev-only OTP-retrieval route gated on
+`NODE_ENV !== 'production'`; `routes/profile.js`; `routes/memberBookings.js`, built on two new shared
+functions extracted from the existing staff booking route (`createBookingInTransaction`,
+`cancelBookingInTransaction` in `domain/bookingTransaction.js`) so both routes call the identical booking
+logic; five new backend test files (`memberLinking`, `profile`, `forgotPassword`, `memberPortal`, plus
+updates to `schema.test.js` for the new table/columns) — 449 backend tests total, up from 406, run twice
+plus after `db:reset`, all clean; on the frontend, `errorCopy.js` + a redesigned `ErrorBanner`/new
+`PageError`/`FieldError` in `States.jsx`; `ProfilePage`, `ForgotPasswordPage`, `MemberHomePage`,
+`MemberSessionsPage`, `MemberBookingsPage` (replacing the old static `WelcomePage`); updated `AppShell`
+nav for all three roles and updated routing; two new Playwright spec files (`member-portal.spec.js`,
+`account-security.spec.js`) plus updates to three existing spec files for the intentional copy/route
+changes — 63 Playwright tests total (up from 41), run twice clean; and real screenshots captured and
+inspected at 375/768/1024/1440px for every new/changed page via a throwaway QA script (not committed).
+
+### What was correct
+
+The transactional link-or-create logic, the ambiguous-multiple-match fallback (create rather than guess),
+the OTP hashing/expiry/attempt-limit/cooldown/generic-response design, the shared booking-domain-logic
+reuse between staff and member routes, and the in-place `ErrorBanner` redesign (retrofitting all eleven
+existing call sites automatically) all worked as designed on the first implementation and needed no
+correction — verified by the new backend and Playwright suites above, not merely assumed.
+
+### What was wrong, and what was corrected
+
+1. **A real bug, caught only by the required visual QA screenshots, not by any automated test**: the
+   first implementation gave a brand-new self-registered member (no staff record to claim)
+   `membership_expires_on` set to *today*. `domain/membership.js#isMembershipExpired` is a strict `<`
+   comparison — an expiry equal to today is still valid for the rest of that civil day — so this left a
+   fresh signup genuinely bookable for several hours, a real (if short-lived) free membership, exactly
+   the outcome the design was trying to prevent. No backend test caught this because every existing test
+   that checked the expired-membership rejection used an explicit, obviously-past date
+   (`grantMembership('2000-01-01')`), never a truly fresh, untouched signup. It was caught reading the
+   member home page's own rendered membership badge at 375px and 1440px during the required screenshot
+   review and noticing it read "Expiring soon" for an account that should have had no membership at all.
+   Fixed by setting the expiry to *yesterday* instead of today (`domain/memberLinking.js`), and a new,
+   more direct backend test was added specifically to close the gap
+   (`tests/memberPortal.test.js`, "rejects a new booking for a brand-new signup that was never granted a
+   real membership") — documented in full as a reversed decision, `docs/decisions.md` Decision 42.
+2. **The redesigned error copy intentionally broke three pre-existing Playwright assertions that checked
+   for the exact old, raw error text** — `auth.spec.js`'s login-failure test asserted
+   `/invalid email or password/i` (the old backend string), `instructor-flow.spec.js` asserted a raw
+   `'403'` substring in the authorization-boundary alert, and `polish.spec.js`'s signup test asserted the
+   old static `WelcomePage`'s literal `<h1>Welcome, {name}</h1>` heading and its single-link nav. All
+   three were the *intended*, not accidental, consequence of the redesign (the whole point was to remove
+   exactly this kind of raw text) — fixed by updating each assertion to match the new, polished copy and
+   the new `MemberHomePage`'s time-of-day greeting and four-link nav, the same "fix the test to match an
+   intentional change, don't revert the change" precedent this project's own `docs/decisions.md` already
+   established for the mobile-nav-drawer and dashboard-greeting changes in an earlier milestone.
+3. **A new Playwright test file hung indefinitely** (`memberPortal.spec.js`'s early draft, backend
+   equivalent — `tests/memberPortal.test.js`): its `after()` hook tried to delete the test's own member/
+   user fixtures, but nearly every member created in that file books (and most cancel) a real session,
+   which writes `booking_events` rows whose `actor_user_id` is that member's own user id —
+   `ON DELETE RESTRICT` (see `schema.test.js`) makes such a user permanently undeletable, and the delete
+   call threw *before* `server.stop()`/`closeConnection()` ever ran, leaving an open HTTP listener and DB
+   pool that kept the Node process alive forever. Root-caused by checking `pg_stat_activity` (no query was
+   actually stuck) and then process CPU usage (idle, not spinning) before concluding it was a resource
+   leak rather than a slow query, and fixed by removing the cleanup entirely in favor of this project's
+   own established "unique per run, never cleaned up" fixture pattern (`tests/bookings.test.js`'s own
+   documented precedent for exactly this situation) rather than trying to make the delete succeed.
+4. **Several Playwright locator collisions** in the two new spec files, each a real strict-mode failure
+   caught by actually running the suite, not predicted: `getByLabel('New password')` matched both that
+   field and "Confirm new password" (fixed with `exact: true`); `getByRole('link', { name: 'My Bookings'
+   })`/`'Profile'` matched both the sidebar nav link and a same-named quick-action button on the member
+   home page (fixed by scoping to `nav.sidebar-nav`); and a dev-OTP fetch raced the UI's own in-flight
+   request because the test didn't wait for the OTP-entry step to actually render before reaching for it
+   out of band (fixed by adding that wait). None were product bugs — all were the tests written too
+   quickly against a UI whose real DOM shape had more than one match.

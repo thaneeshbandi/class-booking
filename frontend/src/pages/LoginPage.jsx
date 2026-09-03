@@ -39,7 +39,7 @@ export function LoginPage() {
     <AuthLayout title="Welcome back" subtitle="Sign in to continue.">
       <span className="badge tone-blue auth-workspace-tag">Staff &amp; instructor workspace</span>
       <form onSubmit={handleSubmit} noValidate>
-        <ErrorBanner error={error} />
+        <ErrorBanner error={error} context="login" />
 
         <label className="form-label" htmlFor="email">
           Email
@@ -67,6 +67,9 @@ export function LoginPage() {
           required
           autoComplete="current-password"
         />
+        <div className="forgot-password-link">
+          <Link to="/forgot-password">Forgot password?</Link>
+        </div>
 
         <button type="submit" className="btn btn-primary btn-block" disabled={submitting}>
           {submitting ? 'Signing in…' : 'Sign in'}

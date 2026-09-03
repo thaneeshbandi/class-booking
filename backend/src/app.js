@@ -7,7 +7,9 @@ import authRouter from './routes/auth.js';
 import bookingsRouter from './routes/bookings.js';
 import classesRouter from './routes/classes.js';
 import dashboardRouter from './routes/dashboard.js';
+import memberBookingsRouter from './routes/memberBookings.js';
 import membersRouter from './routes/members.js';
+import profileRouter from './routes/profile.js';
 import roomsRouter from './routes/rooms.js';
 import sessionsRouter from './routes/sessions.js';
 import usersRouter from './routes/users.js';
@@ -45,6 +47,8 @@ export function createApp() {
   app.use('/api/dashboard', dashboardRouter);
   app.use('/api/rooms', roomsRouter);
   app.use('/api/users', usersRouter);
+  app.use('/api/profile', profileRouter);
+  app.use('/api/member', memberBookingsRouter);
 
   app.get('/health', async (_req, res) => {
     try {

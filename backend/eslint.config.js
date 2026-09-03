@@ -13,6 +13,7 @@ export default [
         Intl: 'readonly',
         URL: 'readonly',
         Buffer: 'readonly',
+        fetch: 'readonly',
       },
     },
     rules: {

@@ -1,4 +1,7 @@
+import { assertCanCancel, assertCanCreate } from './bookingTiming.js';
+import { assertCancellable } from './bookingTransitions.js';
 import { BookingError } from './bookingErrors.js';
+import { isMembershipExpired } from './membership.js';
 import { env } from '../config/env.js';
 
 /**
@@ -181,4 +184,110 @@ export function translateBookingPgError(error) {
     return new BookingError(409, 'This session is busy right now; please try again.');
   }
   return null;
+}
+
+/**
+ * The single booking-creation transaction body, used by both the staff
+ * route (`routes/bookings.js`, `memberId` from the request body) and the
+ * member-portal route (`routes/memberBookings.js`, `memberId` derived
+ * server-side from the authenticated user's own linked member row) — so the
+ * two can never diverge on capacity, waitlist, or membership-expiry rules.
+ * Callers open the transaction and set the lock timeout; this only runs the
+ * decision inside it. Throws `BookingError` for every rejection.
+ */
+export async function createBookingInTransaction(trx, { sessionId, memberId, actorUserId }) {
+  const session = await lockSessionForBooking(trx, sessionId);
+  if (!session) {
+    throw new BookingError(404, 'Session not found.');
+  }
+  assertCanCreate({ hasStarted: session.hasStarted });
+
+  const member = await trx('members').where({ id: memberId }).first();
+  if (!member) {
+    throw new BookingError(400, 'Unknown member id.');
+  }
+  if (isMembershipExpired(member.membership_expires_on, session.studioToday)) {
+    throw new BookingError(409, `This member's membership expired on ${member.membership_expires_on}.`);
+  }
+
+  const existingActive = await trx('bookings')
+    .where({ session_id: sessionId, member_id: memberId })
+    .whereIn('status', ['booked', 'waitlisted'])
+    .first();
+  if (existingActive) {
+    throw new BookingError(409, 'This member already has an active booking for this session.');
+  }
+
+  const occupied = await countOccupiedSeats(trx, sessionId);
+  const status = occupied < session.capacity ? 'booked' : 'waitlisted';
+
+  const [booking] = await trx('bookings')
+    .insert({ session_id: sessionId, member_id: memberId, status })
+    .returning('id');
+  await writeBookingEvent(trx, {
+    bookingId: booking.id,
+    eventType: 'created',
+    toStatus: status,
+    actorUserId,
+  });
+  return booking.id;
+}
+
+/**
+ * The single booking-cancellation transaction body — same reuse rationale as
+ * `createBookingInTransaction` above, shared by the staff cancel route and
+ * the member-portal cancel route. Ownership authorization (a member may only
+ * cancel their own booking) is the caller's responsibility, checked *before*
+ * calling this: `member_id` is immutable once a booking is created (no route
+ * ever updates it), so reading it unlocked ahead of the transaction is safe.
+ * Returns the ids of any bookings promoted off the waitlist as a result.
+ */
+export async function cancelBookingInTransaction(trx, { bookingId, actorUserId, note }) {
+  const peek = await trx('bookings').where({ id: bookingId }).first('session_id');
+  if (!peek) {
+    throw new BookingError(404, 'Booking not found.');
+  }
+
+  const session = await lockSessionForBooking(trx, peek.session_id);
+  const booking = await loadBookingForUpdate(trx, bookingId);
+  if (!booking) {
+    throw new BookingError(404, 'Booking not found.');
+  }
+
+  assertCancellable(booking.status);
+  assertCanCancel({ hasStarted: session.hasStarted });
+
+  const wasBooked = booking.status === 'booked';
+  await trx('bookings')
+    .where({ id: booking.id })
+    .update({ status: 'cancelled', updated_at: trx.fn.now() });
+  await writeBookingEvent(trx, {
+    bookingId: booking.id,
+    eventType: 'status_changed',
+    fromStatus: booking.status,
+    toStatus: 'cancelled',
+    actorUserId,
+  });
+  if (note) {
+    await writeBookingEvent(trx, {
+      bookingId: booking.id,
+      eventType: 'note',
+      note,
+      actorUserId,
+    });
+  }
+
+  let promotedIds = [];
+  if (wasBooked) {
+    const occupied = await countOccupiedSeats(trx, session.id);
+    const freeSeats = session.capacity - occupied;
+    const promoted = await promoteWaitlistFIFO(trx, {
+      sessionId: session.id,
+      freeSeats,
+      actorUserId,
+      causedByBookingId: booking.id,
+    });
+    promotedIds = promoted.map((row) => row.id);
+  }
+  return { promotedIds };
 }

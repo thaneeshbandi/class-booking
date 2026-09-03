@@ -306,7 +306,7 @@ test.describe('signup', () => {
     await expect(page.locator('select')).toHaveCount(0);
   });
 
-  test('signing up creates a member account, auto-authenticates, and lands on the welcome page', async ({
+  test('signing up creates a member account, auto-authenticates, and lands on the member home page', async ({
     page,
   }) => {
     const diag = attachDiagnostics(page);
@@ -320,8 +320,11 @@ test.describe('signup', () => {
     await page.getByLabel('Confirm password').fill('a-real-password-123');
     await page.getByRole('button', { name: 'Sign up' }).click();
 
-    await expect(page).toHaveURL(/\/welcome$/);
-    await expect(page.getByRole('heading', { name: `Welcome, ${name}` })).toBeVisible();
+    // The member portal's own home page (`MemberHomePage`), not the old
+    // static placeholder — a time-of-day greeting by first name, same
+    // pattern the staff dashboard's own heading already uses.
+    await expect(page).toHaveURL(/\/member$/);
+    await expect(page.getByRole('heading', { name: new RegExp(`^good (morning|afternoon|evening), ${name.split(' ')[0]}$`, 'i') })).toBeVisible();
 
     // The role badge in the topbar is visible proof this account is
     // exactly 'member' — never anything privileged — with no way for the
@@ -333,11 +336,14 @@ test.describe('signup', () => {
     expect(Object.keys(storage.local)).toEqual([]);
     expect(Object.keys(storage.session)).toEqual([]);
 
-    // A member account has no nav beyond its own home — an honest
-    // reflection of what it can actually do.
+    // A member account's nav is its own portal — Home, Sessions, My
+    // Bookings, Profile — never a staff/instructor view.
     const nav = page.locator('nav.sidebar-nav');
-    await expect(nav.getByRole('link')).toHaveCount(1);
+    await expect(nav.getByRole('link')).toHaveCount(4);
     await expect(nav.getByRole('link', { name: 'Home' })).toBeVisible();
+    await expect(nav.getByRole('link', { name: 'Sessions' })).toBeVisible();
+    await expect(nav.getByRole('link', { name: 'My Bookings' })).toBeVisible();
+    await expect(nav.getByRole('link', { name: 'Profile' })).toBeVisible();
 
     diag.assertClean({ allowExpectedAuthFailures: true });
   });

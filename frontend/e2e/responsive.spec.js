@@ -92,5 +92,35 @@ for (const [name, viewport] of Object.entries(VIEWPORTS)) {
         fullPage: true,
       });
     });
+
+    test(`the member portal (home, sessions, bookings, profile) stays usable`, async ({ page }) => {
+      await page.goto('/signup');
+      await page.getByLabel('Full name').fill(`Responsive Member ${name}`);
+      await page.getByLabel('Email').fill(`responsive-member-${name}-${Date.now()}@example.com`);
+      await page.getByLabel('Password', { exact: true }).fill('a-real-password-123');
+      await page.getByLabel('Confirm password').fill('a-real-password-123');
+      await page.getByRole('button', { name: 'Sign up' }).click();
+      await page.waitForURL(/\/member$/);
+
+      await page.screenshot({ path: `test-results/screenshots/member-home-${name}.png`, fullPage: true });
+
+      await clickNavLink(page, viewport, 'Sessions', { exact: true });
+      await expect(page).toHaveURL(/\/member\/sessions$/);
+      await page.screenshot({ path: `test-results/screenshots/member-sessions-${name}.png`, fullPage: true });
+
+      await clickNavLink(page, viewport, 'My Bookings');
+      await expect(page).toHaveURL(/\/member\/bookings$/);
+      await page.screenshot({ path: `test-results/screenshots/member-bookings-${name}.png`, fullPage: true });
+
+      await clickNavLink(page, viewport, 'Profile');
+      await expect(page).toHaveURL(/\/profile$/);
+      await expect(page.getByRole('button', { name: 'Save changes' })).toBeInViewport();
+      await page.screenshot({ path: `test-results/screenshots/profile-${name}.png`, fullPage: true });
+
+      const overflowX = await page.evaluate(
+        () => document.documentElement.scrollWidth - document.documentElement.clientWidth,
+      );
+      expect(overflowX).toBeLessThanOrEqual(1);
+    });
   });
 }

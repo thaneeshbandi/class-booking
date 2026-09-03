@@ -91,6 +91,15 @@ export const envSchema = z.object({
   // explicit allowed origin, never `*` — a wildcard is incompatible with
   // `Access-Control-Allow-Credentials: true`, which cookie-based auth needs.
   FRONTEND_ORIGIN: z.string().url().default('http://localhost:5173'),
+
+  // Selects the email provider `src/email/emailService.js` sends
+  // password-reset OTPs through. Unset in development/test resolves to a
+  // console/dev provider that never touches a real inbox; production must
+  // set this to a real provider (currently only "webhook" — see
+  // `emailService.js`) or the app refuses to start sending email at all.
+  EMAIL_PROVIDER: z.enum(['webhook']).optional(),
+  EMAIL_WEBHOOK_URL: z.string().url().optional(),
+  EMAIL_WEBHOOK_TOKEN: z.string().min(1).optional(),
 });
 
 export class EnvValidationError extends Error {

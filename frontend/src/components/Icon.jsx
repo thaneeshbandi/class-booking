@@ -31,6 +31,11 @@ const ICONS = {
   info: 'M10 17a7 7 0 1 0 0-14 7 7 0 0 0 0 14Zm0-9.5V14M10 6v.01',
   menu: 'M3 6h14M3 10h14M3 14h14',
   inbox: 'M4 4h12l2 6v6a1 1 0 0 1-1 1H3a1 1 0 0 1-1-1v-6l2-6Zm-1.8 6H7l1 2h4l1-2h4.8',
+  mail: 'M3 5h14a1 1 0 0 1 1 1v8a1 1 0 0 1-1 1H3a1 1 0 0 1-1-1V6a1 1 0 0 1 1-1Zm0 0 7 6 7-6',
+  lock: 'M5 9V6.5a5 5 0 0 1 10 0V9M4 9h12a1 1 0 0 1 1 1v6a1 1 0 0 1-1 1H4a1 1 0 0 1-1-1v-6a1 1 0 0 1 1-1Zm6 4v2',
+  shield: 'M10 2 4 4.5V9c0 4.2 2.6 7.4 6 8.5 3.4-1.1 6-4.3 6-8.5V4.5L10 2Zm-2.5 8 1.8 1.8L13.5 8',
+  arrowLeft: 'M12.5 4.5 6 10l6.5 5.5M6.5 10H17',
+  refresh: 'M4 10a6 6 0 0 1 10.2-4.2M16 10a6 6 0 0 1-10.2 4.2M4 3v3h3M17 17v-3h-3',
 };
 
 export function Icon({ name, size = 18, strokeWidth = 1.7, className, ...rest }) {

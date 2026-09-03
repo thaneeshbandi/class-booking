@@ -31,6 +31,7 @@ const DOMAIN_TABLES = [
   'bookings',
   'booking_events',
   'member_alert_dismissals',
+  'password_reset_otps',
 ];
 
 const EXPECTED_INDEXES = [
@@ -38,6 +39,7 @@ const EXPECTED_INDEXES = [
   'users_email_unique',
   'members_pkey',
   'members_membership_expires_on',
+  'members_user_id_unique',
   'rooms_pkey',
   'rooms_name_ci_unique',
   'classes_pkey',
@@ -59,6 +61,8 @@ const EXPECTED_INDEXES = [
   'booking_events_booking',
   'member_alert_dismissals_pkey',
   'member_alert_dismissals_unique',
+  'password_reset_otps_pkey',
+  'password_reset_otps_user_id_created_at',
 ];
 
 const EXPECTED_CHECK_CONSTRAINTS = [
@@ -160,7 +164,7 @@ after(async () => {
 });
 
 describe('4. tables', () => {
-  it('every domain table exists, and only those nine', async () => {
+  it('every domain table exists, and only those ten', async () => {
     const { rows } = await db.raw(`
       SELECT table_name FROM information_schema.tables
       WHERE table_schema = 'public' AND table_type = 'BASE TABLE'
@@ -169,7 +173,10 @@ describe('4. tables', () => {
     `);
     const found = rows.map((r) => r.table_name);
     assert.deepEqual(found, [...DOMAIN_TABLES].sort());
-    assert.equal(found.length, 9, 'the schema is exactly nine domain tables');
+    // Nine from the original ten mandatory goals, plus `password_reset_otps`
+    // (migration 013 — the account/member-linking and forgot-password
+    // milestone).
+    assert.equal(found.length, 10, 'the schema is exactly ten domain tables');
   });
 
   it('the three enum types exist with the approved values', async () => {
