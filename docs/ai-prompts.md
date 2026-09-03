@@ -890,3 +890,64 @@ correction — verified by the new backend and Playwright suites above, not mere
    request because the test didn't wait for the OTP-entry step to actually render before reaching for it
    out of band (fixed by adding that wait). None were product bugs — all were the tests written too
    quickly against a UI whose real DOM shape had more than one match.
+
+## Frontend correction: a real Bookings table structure bug, and final visual QA
+
+### Prompt
+
+A short, tightly-scoped instruction explicitly framed as a correction, not a new milestone: no new
+business functionality, no backend rule changes, no whole-app redesign, no changes to the auth/member
+architecture, preserve the existing design system. The user reported inspecting the actual rendered
+Bookings page and finding the row data visually shifted relative to its own headers (Member | Class |
+Session | Status | Booked at | Actions), gave the exact wrong-looking row content they saw, and required:
+fixing the DOM structure so header and row cell counts match exactly with each field under its own
+header; a polish pass on the table's visual hierarchy, spacing, and the Cancel button once the structure
+was correct; an audit of every other table in the app for the same class of bug; a check for leftover
+duplicate JSX/CSS from the earlier redesign; a small visual audit of the app shell; real Playwright/
+Chromium visual QA at 375/768/1024/1440px with the Bookings screenshot specifically inspected by eye, not
+just asserted on; a new Playwright regression test asserting the table's structure by content, not just
+by count; the full backend/frontend/Playwright verification battery, run twice and again after a fresh
+`db:reset`; and documentation updated only if real behavior changed.
+
+### What was produced
+
+Read `BookingsPage.jsx`'s actual table JSX before touching anything, and — separately — rendered the real
+page with Chromium and read `table.table thead th`'s count against the first row's `td` count
+programmatically, which is what actually confirmed the bug (6 header cells, 5 body cells) rather than
+assuming the user's screenshot description matched some other cause. Root cause: the class title had been
+folded into the Member cell as "secondary" text instead of being given its own `<td>`, so a header meant
+for Class had no cell of its own — every subsequent cell (session time, status, booked-at, the Cancel
+button) rendered one column left of where its header said it would be, and the Actions header ended up
+with nothing under it at all. Fixed by giving Class its own `<td>` and moving each of the following cells
+back into its own correct position — six `<td>`s for six `<th>`s, with Member now showing the member's
+email as secondary text (already present in the API response) instead of the class title, matching the
+requested identity-cell hierarchy. Also fixed, once the structure was correct: the Session and Booked-at
+columns no longer wrap their timestamps across two lines (a `col-nowrap` modifier), the row/header padding
+was opened up slightly for breathing room, and the Cancel button gained a subtle border so it reads as a
+defined, clickable control at rest rather than only on hover. Audited every other table in the app
+(Members, Classes, Sessions, Session Detail, Alerts — Dashboard and Booking Detail have no `<table>`) by
+comparing `<th>` and `<td>` counts and reading each row's actual field assignment; all five were already
+structurally and semantically correct — the bug was isolated to `BookingsPage.jsx`. Found and removed one
+genuine leftover: a duplicate `.field-error` CSS rule (the class already existed from an earlier
+milestone; the previous session's own forgot-password/profile work had added a second, near-identical
+declaration for the same selector without noticing). Added a new Playwright test
+(`polish.spec.js`, "every header has exactly one matching cell, with the right content in the right
+column") that pins each header to its own cell by content, not merely by count — verified it actually
+fails against the pre-fix code (reverted the fix locally, re-ran the test, confirmed a real failure with
+"Expected: 6, Received: 5," then restored the fix) before trusting it as a real regression guard.
+
+### What was correct
+
+The audit of every other table found no second occurrence of the bug — each already had matching header/
+cell counts with content in the right place, so no changes were needed there, consistent with the
+instruction not to blindly rewrite tables that were not actually broken. The filter bar and app shell were
+inspected and found to already meet the brief's own bar (consistent control heights, a search icon,
+wrapping, active nav state, alert badge, avatar/role badge/logout) — nothing there needed changing either.
+
+### What was wrong, and what was corrected
+
+The one real bug is described above — a missing `<td>`, not a CSS or layout issue, caught by directly
+reading the rendered DOM's cell counts rather than only looking at a screenshot. Nothing else was found
+wrong during this session's verification pass; every other change made (spacing, nowrap, the Cancel
+button border, the duplicate CSS removal) was a genuine, targeted fix for something specifically named in
+the brief, not a rewrite.

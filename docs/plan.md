@@ -19,7 +19,8 @@ happened, not a retrofit.
 | 10 | 2026-09-02, later still | Automated browser E2E verification with Playwright — real Chromium driving the actual running frontend and backend; one genuine responsive-layout bug and one genuine pagination bug found and fixed along the way; this documentation update. |
 | 11 | 2026-09-02, later still | Final frontend UI/UX polish — a full visual redesign, a fixed booking-table action column, a client-side recurring-generation UX pass, and a new public signup flow (migration 011, `POST /api/auth/signup`), each with new Playwright coverage; this documentation update. |
 | 12 | 2026-09-03 | Full frontend visual redesign — design tokens, a hand-rolled icon set, a redesigned app shell with a real mobile drawer, split-screen auth pages, and every page rebuilt on the new component set; one small backend addition (`bookedCount` on `GET /api/sessions`); this documentation update. |
-| 13 (this one) | 2026-09-03 | Account/member linking (migration 012), a member portal (browse/book/cancel, reusing the existing booking domain logic), a profile page for every role, forgot-password by email OTP (migration 013), and a reusable error-presentation system replacing raw `{status}: {message}` everywhere; this documentation update. |
+| 13 | 2026-09-03 | Account/member linking (migration 012), a member portal (browse/book/cancel, reusing the existing booking domain logic), a profile page for every role, forgot-password by email OTP (migration 013), and a reusable error-presentation system replacing raw `{status}: {message}` everywhere; this documentation update. |
+| 14 (this one) | 2026-09-03 | A frontend-only correction: fixed a real Bookings table structural bug (a missing `<td>` shifted every cell one column left of its header), a small table/button polish pass, a full table-structure audit across the app, one duplicate-CSS leftover removed, a new Playwright regression test, and real screenshot-based visual QA; this documentation update. |
 
 Session 2's five foundation commits share one timestamp to the minute in `git log`, which is a real
 gap in this record: they clearly did not all land in the same sixty seconds, and no finer-grained
@@ -675,6 +676,49 @@ named by name (Login, Signup, Forgot Password at both its email and OTP steps pl
 Dashboard, Member Home, Member Sessions, My Bookings, Profile for a member and for staff, Classes,
 Bookings, Recurring Sessions, and the redesigned login error state) — this is what caught the membership-
 expiry bug above; a second pass confirmed the fix.
+
+## Session 14 — Bookings table structure bug fix and final visual QA
+
+A short, explicitly scoped correction session, not a new milestone: no new business functionality, no
+backend changes, no re-redesign. The user reported the rendered Bookings page's row content visually
+misaligned with its own column headers and gave a concrete example of what they saw. Before writing any
+fix, the actual claim was verified directly — `BookingsPage.jsx`'s table JSX was read, then the real page
+was rendered with Chromium and `table.table thead th`/first-row `td` counts were compared programmatically
+(6 vs. 5), confirming a genuine structural bug: the class title had been folded into the Member cell
+instead of getting its own `<td>`, leaving one header (`Class`) with no cell of its own and shifting every
+following cell — session time, status, booked-at, the Cancel button — one column left, with nothing under
+`Actions` at all.
+
+Fixed by restoring the missing `<td>` and moving each field back to the column its own header names,
+using the member's email (already in the existing API response) as the Member cell's secondary line in
+place of the class title. Once the structure was correct, a small polish pass followed: the Session and
+Booked-at columns no longer wrap their timestamps across two lines, cell padding was opened up slightly,
+and the Cancel button gained a subtle border so it reads as a defined control at rest. Every other table
+in the app (Members, Classes, Sessions, Session Detail, Alerts) was audited the same way — header/cell
+counts compared, each row's field assignment read directly — and all five were already correct; the bug
+was isolated to Bookings, so nothing else was rewritten. One genuine leftover was found and removed: a
+duplicate `.field-error` CSS declaration from the previous session's own work.
+
+A new Playwright test was added specifically to guard this bug's exact shape (pinning each header to its
+own cell by content, not just by count) — and, before trusting it, was verified to actually fail against
+the pre-fix code (the fix was stashed, the test re-run, a real "Expected: 6, Received: 5" failure
+confirmed, then the fix restored) rather than assumed to be a meaningful regression test.
+
+### Verification
+
+Backend `npm test --test-concurrency=1` (450 tests, 449 passing, 1 skipped — unchanged, no backend files
+touched) and `npm run lint`, both clean; frontend `npm run lint` and `npm run build`, both clean; the full
+Playwright suite (64 tests — the 63 from Session 13 plus the one new structure-regression test), run twice
+consecutively, both times clean; a fresh `npm run db:reset` followed by the backend suite once more
+(450/449/1, identical) and the Playwright suite once more against the freshly seeded database (64/64,
+clean). Real screenshots were captured with Chromium against the freshly reset database at 1440px/375px
+for Dashboard, Members, Classes, Sessions, Bookings, Session Detail, Recurring Sessions, and Profile
+(desktop) and Dashboard, Bookings, Sessions, and Profile (mobile), with `document.documentElement.
+scrollWidth - clientWidth` measured as exactly `0` on every mobile page. The Bookings screenshot was
+specifically inspected by eye against the exact structure required — member name and email under Member,
+class title under Class, session date/time under Session, status badge under Status, booked-at timestamp
+under Booked at, Cancel button or em-dash placeholder under Actions — and confirmed correct, not merely
+inferred from the passing test.
 
 ## What was cut
 

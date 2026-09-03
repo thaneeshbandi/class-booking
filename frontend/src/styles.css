@@ -1007,18 +1007,28 @@ textarea:focus-visible,
 .table th,
 .table td {
   text-align: left;
-  padding: 11px 14px;
+  padding: 14px 18px;
   border-bottom: 1px solid var(--color-border);
   vertical-align: middle;
 }
 
 .table th {
   background: var(--color-surface-muted);
+  padding-top: 12px;
+  padding-bottom: 12px;
   font-size: 11.5px;
   font-weight: 700;
   text-transform: uppercase;
-  letter-spacing: 0.04em;
+  letter-spacing: 0.05em;
   color: var(--color-text-muted);
+  white-space: nowrap;
+}
+
+/* A column whose content is a single short, self-similar value (a date, a
+ * timestamp) reads worse wrapped across two lines than it does simply
+ * taking the width it needs — unlike a name or title column, there's no
+ * "let it wrap" tradeoff being made on purpose here. */
+.table td.col-nowrap {
   white-space: nowrap;
 }
 
@@ -1454,7 +1464,7 @@ a.metadata-chip:hover {
  * serious. */
 .btn-ghost-danger {
   background: transparent;
-  border-color: transparent;
+  border-color: var(--color-error-border);
   color: var(--color-danger);
 }
 
@@ -1659,13 +1669,6 @@ a.metadata-chip:hover {
   margin: 0 0 var(--space-2);
   color: var(--color-text-muted);
   font-size: 13.5px;
-}
-
-/* Inline, field-level error text — sits directly under one form field. */
-.field-error {
-  margin: 4px 0 0;
-  font-size: 12.5px;
-  color: var(--color-error-text);
 }
 
 .state-success {

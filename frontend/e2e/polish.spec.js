@@ -146,6 +146,79 @@ test.describe('bookings table — fixed action column alignment', () => {
 
     diag.assertClean({ allowExpectedAuthFailures: true });
   });
+
+  // Regression test for a real bug: an earlier version of this table
+  // rendered only five <td> cells against six <th> headers (the class
+  // title had been folded into the member cell instead of getting its own
+  // column), which silently shifted every later cell one column left —
+  // session time under "Class", status under "Session", booked-at under
+  // "Status", the Cancel button under "Booked at", and nothing at all under
+  // "Actions". The alignment test above only compares rows *to each other*,
+  // so it could not have caught this (both rows were shifted identically).
+  // This test instead pins each header to its own cell *by content*, not
+  // just by count, so a future regression of the same shape fails here.
+  test('every header has exactly one matching cell, with the right content in the right column', async ({
+    page,
+  }) => {
+    await login(page, STAFF);
+
+    const memberName = uniqueLabel('Structure Check');
+    const email = `structure-check-${Date.now()}@example.com`;
+    await createMember(page, memberName, email);
+
+    const sessionId = await createSession(page, {
+      instructorFullName: INSTRUCTOR.fullName,
+      roomName: SEED_ROOM_NAME,
+      daysFromNow: randomFutureDayOffset(),
+      hour: 14,
+    });
+
+    await page.goto('/bookings');
+    await page.getByRole('button', { name: 'Create booking' }).click();
+    const dialog = page.getByRole('dialog');
+    await dialog.getByLabel('Member').selectOption({ label: `${memberName} (${email})` });
+    await dialog.getByLabel('Session').selectOption({ value: sessionId });
+    await dialog.getByRole('button', { name: 'Create booking', exact: true }).click();
+    await expect(dialog).not.toBeVisible();
+
+    await page.goto('/bookings');
+
+    // Exactly six header cells, in the required order.
+    const headers = page.locator('table.table thead th');
+    await expect(headers).toHaveCount(6);
+    await expect(headers).toHaveText(['Member', 'Class', 'Session', 'Status', 'Booked at', 'Actions']);
+
+    const row = page.getByRole('row', { name: new RegExp(memberName) });
+    const cells = row.locator('td');
+    await expect(cells).toHaveCount(6);
+
+    // Content lands in the column its own header names — not merely "a
+    // cell somewhere in this row contains this text" (which the buggy
+    // version would also have satisfied), but the specific, indexed cell.
+    await expect(cells.nth(0)).toContainText(memberName); // Member
+    await expect(cells.nth(1)).toContainText(SEED_CLASS_TITLE); // Class
+    await expect(cells.nth(1)).not.toContainText(memberName);
+    await expect(cells.nth(2).locator('.metadata-chip')).toBeVisible(); // Session: calendar chip
+    await expect(cells.nth(2)).not.toContainText(SEED_CLASS_TITLE);
+    await expect(cells.nth(3).getByText('Booked', { exact: true })).toBeVisible(); // Status
+    await expect(cells.nth(4)).not.toContainText('Booked'); // Booked at is a timestamp, not the status word
+    await expect(cells.nth(5)).toHaveClass(/col-actions/); // Actions
+    await expect(cells.nth(5).getByRole('button', { name: 'Cancel' })).toBeVisible();
+
+    // A row with no available action still has six cells, with the
+    // placeholder specifically inside the Actions cell — not spilled into
+    // "Booked at" the way the original bug did.
+    await row.getByRole('button', { name: 'Cancel' }).click();
+    await page.getByRole('dialog').getByRole('button', { name: 'Cancel booking' }).click();
+    await expect(row.getByText('Cancelled', { exact: true })).toBeVisible();
+
+    const cellsAfterCancel = row.locator('td');
+    await expect(cellsAfterCancel).toHaveCount(6);
+    await expect(cellsAfterCancel.nth(5)).toHaveClass(/col-actions/);
+    await expect(cellsAfterCancel.nth(5).locator('.table-actions-placeholder')).toBeVisible();
+    await expect(cellsAfterCancel.nth(5).getByRole('button', { name: 'Cancel' })).toHaveCount(0);
+    await expect(cellsAfterCancel.nth(4)).not.toContainText('—'); // the placeholder never leaks into Booked at
+  });
 });
 
 // Scenario "4. duplicate generation" (submitting the identical request twice

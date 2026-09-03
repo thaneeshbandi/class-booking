@@ -139,6 +139,19 @@ membership. Fixed to yesterday's date, with a new backend test added specificall
 original test suite had missed; documented in full, including why it wasn't caught the first time, as a
 reversed decision in `docs/decisions.md`, Decision 42, and in `docs/ai-prompts.md`.
 
+**A final, frontend-only correction milestone** fixed a real structural bug on the Bookings page: the row
+markup rendered only five `<td>` cells against the header's six `<th>` cells (the class title had been
+folded into the Member cell instead of getting its own column), which silently shifted every later
+cell — session time, status, booked-at, the Cancel button — one column left of its actual header, with
+nothing at all under "Actions." Confirmed directly by comparing rendered header/cell counts with Chromium
+before writing any fix, not assumed from the bug report alone. Fixed by restoring the missing cell; every
+other table in the app (Members, Classes, Sessions, Session Detail, Alerts) was audited the same way and
+found already correct — the bug was isolated to Bookings. One new Playwright test
+(`polish.spec.js`) pins each header to its own cell by content and was verified to actually fail against
+the pre-fix code before being trusted. 64 Playwright tests total (the 63 above plus this one), run twice
+clean and once more clean after a fresh `db:reset`; backend suite unchanged (450 tests, 449 passing, 1
+skipped — no backend files were touched, per this milestone's own scope).
+
 ## How much time did you actually spend?
 
 ## What would you do next, with another 12 hours?

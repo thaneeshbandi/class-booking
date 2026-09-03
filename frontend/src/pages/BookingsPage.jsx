@@ -271,10 +271,11 @@ export function BookingsPage() {
                         <span className="cell-identity-primary">
                           <Link to={`/bookings/${booking.id}`}>{booking.member.fullName}</Link>
                         </span>
-                        <span className="cell-identity-secondary">{booking.class.title}</span>
+                        <span className="cell-identity-secondary">{booking.member.email}</span>
                       </div>
                     </td>
-                    <td>
+                    <td>{booking.class.title}</td>
+                    <td className="col-nowrap">
                       <Link to={`/sessions/${booking.session.id}`} className="metadata-chip">
                         <Icon name="calendar" size={13} />
                         {new Date(booking.session.startsAt).toLocaleString(undefined, {
@@ -288,7 +289,7 @@ export function BookingsPage() {
                     <td>
                       <StatusBadge status={booking.status} />
                     </td>
-                    <td>
+                    <td className="col-nowrap">
                       <span className="cell-identity-secondary">
                         {new Date(booking.bookedAt).toLocaleString(undefined, {
                           month: 'short',
