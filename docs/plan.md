@@ -17,7 +17,8 @@ happened, not a retrofit.
 | 8 | 2026-09-02, later still | Final pre-frontend audit — documentation consistency, security/timezone/state-machine/SQL review, and (found during the audit) implementing the missing goal-1 member create/edit endpoints. |
 | 9 | 2026-09-02, later still | The frontend — a React/Vite app covering every mandatory-goal workflow, two small backend additions it genuinely needed (CORS, room/instructor listing), a real cross-origin CSV-download bug found and fixed, and this documentation update. |
 | 10 | 2026-09-02, later still | Automated browser E2E verification with Playwright — real Chromium driving the actual running frontend and backend; one genuine responsive-layout bug and one genuine pagination bug found and fixed along the way; this documentation update. |
-| 11 (this one) | 2026-09-02, later still | Final frontend UI/UX polish — a full visual redesign, a fixed booking-table action column, a client-side recurring-generation UX pass, and a new public signup flow (migration 011, `POST /api/auth/signup`), each with new Playwright coverage; this documentation update. |
+| 11 | 2026-09-02, later still | Final frontend UI/UX polish — a full visual redesign, a fixed booking-table action column, a client-side recurring-generation UX pass, and a new public signup flow (migration 011, `POST /api/auth/signup`), each with new Playwright coverage; this documentation update. |
+| 12 (this one) | 2026-09-03 | Full frontend visual redesign — design tokens, a hand-rolled icon set, a redesigned app shell with a real mobile drawer, split-screen auth pages, and every page rebuilt on the new component set; one small backend addition (`bookedCount` on `GET /api/sessions`); this documentation update. |
 
 Session 2's five foundation commits share one timestamp to the minute in `git log`, which is a real
 gap in this record: they clearly did not all land in the same sixty seconds, and no finer-grained
@@ -512,6 +513,83 @@ recurred. Recorded honestly as an isolated, non-reproducible timing blip rather 
 there was no code-level cause to identify or a fix to make; the required "run at least twice, both
 clean" bar was independently met multiple times before and after it, including the final two official
 verification runs immediately above.
+
+## Session 12 — full frontend visual redesign
+
+Read in order before changing anything: `README.md`, `CLAUDE.md`, `SUBMISSION.md`, every `docs/*.md`
+file, the entire frontend source, and the current Playwright suite — specifically to catalogue, before
+writing any CSS, which existing class names every page already depended on (so a stylesheet rewrite
+could stay a redesign of those classes' own rules rather than a rename that would force touching every
+page), and to note which locators in the existing suite were role/label/text-based versus structural.
+Then, before writing any component, an actual visual audit: the real running app launched with a
+throwaway Playwright script, screenshots taken of every major page at desktop and mobile, and looked at
+— not assumed — to find concrete weaknesses (no icons anywhere, a `.btn` missing `text-decoration: none`
+so an anchor-styled-as-button showed a stray underline, an unbounded "bookings by class" list, a mobile
+nav that was just the desktop sidebar shrunk) before deciding what to build.
+
+Implementation order: shared building blocks first — `Icon.jsx`, `Avatar.jsx`, `MetricCard.jsx`,
+`AuthLayout.jsx`, and the full `styles.css` token/component rewrite — since every later page rewrite
+depended on these existing first, not on rewriting each page's CSS inline as it went. `AppShell.jsx`
+(the highest-leverage single change, present on every page) came next, verified with its own screenshot
+pass before touching any individual page. Login/Signup came next (the first thing a recruiter opening
+the app actually sees), then Dashboard ("the strongest page visually," per the milestone's own
+instruction), then Classes/Members/Alerts, then the more complex Sessions/Session Detail pair (which
+needed the one small backend addition, Decision 31), then Bookings/Booking Detail, then
+RecurringSessionsPage last, since its client-side validation logic was already correct from the previous
+milestone and only needed the new visual language applied around it. A screenshot check followed each
+page, not just at the end — see "What was wrong" below for what several of those checks actually caught.
+
+### What was correct
+
+Cataloguing existing class names and locator conventions before writing a single line of CSS paid off
+directly: 28 of the 41 pre-existing Playwright tests needed zero changes across a rewrite that touched
+nearly every rule in `styles.css` and the JSX of every page in the app. The decision to keep
+`RecurringSessionsPage`'s validation/preview *logic* completely untouched and only change its visual
+presentation meant that page's most complex client-side code (candidate-date counting, weekday-coverage
+detection, the single-day-mismatch message) needed no re-verification beyond confirming the wording
+change in one test assertion (see below) — the logic itself was already correct and stayed correct.
+
+### What was wrong, and what was corrected
+
+Five real issues, every one caught by either a screenshot actually being inspected or the required
+Playwright re-run actually being executed — full detail for each is in `docs/ai-prompts.md`'s account of
+this session:
+
+1. A missing `text-decoration: none` on the shared `.btn` class, found by inspecting a screenshot and
+   confirmed with `getComputedStyle` rather than guessed.
+2. Three empty, meaningless CSS rule bodies briefly left behind mid-edit, caught by a deliberate sweep
+   for empty `{ }` blocks before they were ever run against.
+3. Two Playwright regressions from the new off-canvas mobile drawer and the new dashboard greeting
+   heading — both intentional behavior changes, fixed by updating the tests to match the new (better)
+   behavior, not by reverting the redesign.
+4. A real locator collision between a new dashboard alert banner's link text and the pre-existing
+   "Members" nav link, caught by the Playwright run itself failing with a strict-mode violation.
+5. A repeat of Decision 31's own fixture-cleanup lesson in the `bookedCount` backend test, caught
+   immediately by the full suite failing an unrelated later test with a foreign-key error, and fixed by
+   applying `sessions.test.js`'s own already-documented pattern for a session that carries a real,
+   permanent booking.
+
+The wording of the recurring-generation preview also changed ("N sessions will be attempted" → "N
+sessions will be generated," matching the milestone's own example phrasing) — a deliberate copy
+improvement, not a bug, but it required updating the two `polish.spec.js` assertions that had pinned the
+old wording, which was done alongside the rest of the verification pass rather than treated as a
+separate fix.
+
+### Verification
+
+What was actually run, in order: backend `npm test --test-concurrency=1` (406 tests, 405 passing, 1
+skipped — the two new `bookedCount` tests are the entire delta from the previous milestone's 404) and
+`npm run lint` (clean); frontend `npm run lint` and `npm run build` (both clean); the full Playwright
+suite (`npx playwright test`, still 41 tests — no tests were added this session, several were corrected)
+— which surfaced the mobile-drawer and dashboard-heading regressions and the "Members" locator collision
+above, then two full, clean, consecutive runs (41/41 both times) once every fix landed; a fresh
+`npm run db:reset` followed by the backend suite once more (406/405/1/0, identical) and the Playwright
+suite once more against the freshly reset database (41/41). A further screenshot pass covered every page
+this milestone's own instructions listed by name (login, dashboard, classes, sessions, bookings,
+recurring sessions, members, alerts, session detail, signup, plus booking detail) at 375px, 768px,
+1024px, and 1440px, including a direct `page.evaluate` check that a visually-wide table (Bookings, six
+columns) scrolls only within its own `.table-scroll` container — zero page-level horizontal overflow —
+rather than dragging the whole page sideways.
 
 ## What was cut
 

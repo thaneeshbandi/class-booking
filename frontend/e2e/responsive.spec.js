@@ -14,6 +14,18 @@ const VIEWPORTS = {
   mobile: { width: 375, height: 667 },
 };
 
+/** Below 800px, navigation lives in an off-canvas drawer (see
+ * `AppShell.jsx`) — closed by default, opened by the topbar's hamburger
+ * toggle, and closed again automatically on every navigation. On a wide
+ * viewport the toggle doesn't exist at all (`display: none`), so opening it
+ * is a no-op there and every nav link is simply clicked directly. */
+async function clickNavLink(page, viewport, name, options) {
+  if (viewport.width < 800) {
+    await page.getByRole('button', { name: 'Open navigation' }).click();
+  }
+  await page.getByRole('link', { name, ...options }).click();
+}
+
 for (const [name, viewport] of Object.entries(VIEWPORTS)) {
   test.describe(`responsive sanity — ${name} (${viewport.width}x${viewport.height})`, () => {
     test.use({ viewport });
@@ -21,7 +33,14 @@ for (const [name, viewport] of Object.entries(VIEWPORTS)) {
     test(`dashboard renders and stays within the viewport width`, async ({ page }) => {
       await login(page, STAFF);
       await expect(page).toHaveURL(/\/dashboard$/);
-      await expect(page.getByRole('link', { name: 'Sessions', exact: true })).toBeVisible();
+
+      // On mobile, the nav itself is off-canvas by design — what must stay
+      // reachable is the toggle that opens it, not the links directly.
+      if (viewport.width < 800) {
+        await expect(page.getByRole('button', { name: 'Open navigation' })).toBeInViewport();
+      } else {
+        await expect(page.getByRole('link', { name: 'Sessions', exact: true })).toBeVisible();
+      }
 
       // The page itself must never force horizontal scrolling — individual
       // wide elements (tables) are allowed their own internal scroll, but
@@ -39,7 +58,7 @@ for (const [name, viewport] of Object.entries(VIEWPORTS)) {
 
     test(`the members table and its primary action remain usable`, async ({ page }) => {
       await login(page, STAFF);
-      await page.getByRole('link', { name: 'Members' }).click();
+      await clickNavLink(page, viewport, 'Members');
       await expect(page).toHaveURL(/\/members$/);
 
       await expect(page.getByRole('button', { name: 'Add member' })).toBeInViewport();
@@ -58,13 +77,14 @@ for (const [name, viewport] of Object.entries(VIEWPORTS)) {
 
     test(`the sessions filter/create controls and nav remain reachable`, async ({ page }) => {
       await login(page, STAFF);
-      await page.getByRole('link', { name: 'Sessions', exact: true }).click();
+      await clickNavLink(page, viewport, 'Sessions', { exact: true });
       await expect(page).toHaveURL(/\/sessions$/);
 
       await expect(page.getByRole('button', { name: 'Create session' })).toBeInViewport();
-      // The sidebar nav (which collapses to something narrower on mobile,
-      // but must still exist and remain clickable) can still reach Bookings.
-      await page.getByRole('link', { name: 'Bookings' }).click();
+      // The nav (an off-canvas drawer on mobile, closed again after the
+      // click above) can still reach Bookings — proving the drawer reopens
+      // cleanly, not just that it worked once.
+      await clickNavLink(page, viewport, 'Bookings');
       await expect(page).toHaveURL(/\/bookings$/);
 
       await page.screenshot({

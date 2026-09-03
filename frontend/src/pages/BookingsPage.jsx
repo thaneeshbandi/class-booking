@@ -5,7 +5,8 @@ import { cancelBooking, createBooking, fetchBookings } from '../api/bookings.js'
 import { fetchClasses } from '../api/classes.js';
 import { fetchMembers } from '../api/members.js';
 import { fetchSessions } from '../api/sessions.js';
-import { StatusBadge } from '../components/Badge.jsx';
+import { STATUS_LABEL, StatusBadge } from '../components/Badge.jsx';
+import { Icon } from '../components/Icon.jsx';
 import { ConfirmDialog, Modal } from '../components/Modal.jsx';
 import { Pagination } from '../components/Pagination.jsx';
 import { EmptyState, ErrorBanner, LoadingState } from '../components/States.jsx';
@@ -177,21 +178,29 @@ export function BookingsPage() {
         </div>
         {isStaff ? (
           <button type="button" className="btn btn-primary" onClick={openCreateForm}>
+            <Icon name="plus" size={16} />
             Create booking
           </button>
         ) : null}
       </div>
 
+      {/* The four <select> elements below keep their original DOM order
+       * (class, status, sort, direction) even though this is now visually
+       * grouped — existing Playwright coverage addresses them by that fixed
+       * order, since none of them has an individually associated <label>. */}
       <div className="filter-bar">
-        <input
-          className="form-input"
-          placeholder="Search member name or email…"
-          defaultValue={q}
-          onKeyDown={(event) => {
-            if (event.key === 'Enter') updateParam('q', event.target.value);
-          }}
-          onBlur={(event) => updateParam('q', event.target.value)}
-        />
+        <div className="search-field">
+          <Icon name="search" size={15} className="search-field-icon" />
+          <input
+            className="form-input"
+            placeholder="Search member name or email…"
+            defaultValue={q}
+            onKeyDown={(event) => {
+              if (event.key === 'Enter') updateParam('q', event.target.value);
+            }}
+            onBlur={(event) => updateParam('q', event.target.value)}
+          />
+        </div>
         <select className="form-input" value={classId} onChange={(event) => updateParam('classId', event.target.value)}>
           <option value="">All classes</option>
           {classes.map((c) => (
@@ -204,7 +213,7 @@ export function BookingsPage() {
           <option value="">All statuses</option>
           {STATUSES.map((s) => (
             <option key={s} value={s}>
-              {s}
+              {STATUS_LABEL[s]}
             </option>
           ))}
         </select>
@@ -223,13 +232,19 @@ export function BookingsPage() {
           <option value="desc">Descending</option>
           <option value="asc">Ascending</option>
         </select>
+        {q || classId || status ? (
+          <button type="button" className="btn btn-secondary" onClick={() => setSearchParams({})}>
+            <Icon name="close" size={14} />
+            Clear filters
+          </button>
+        ) : null}
       </div>
 
       {loading ? <LoadingState label="Loading bookings…" /> : null}
       {error ? <ErrorBanner error={error} onRetry={load} /> : null}
       {actionError ? <ErrorBanner error={actionError} /> : null}
       {!loading && !error && data?.bookings.length === 0 ? (
-        <EmptyState label="No bookings match these filters." />
+        <EmptyState icon="search" label="No bookings match these filters." />
       ) : null}
 
       {!loading && !error && data?.bookings.length > 0 ? (
@@ -252,24 +267,43 @@ export function BookingsPage() {
                 return (
                   <tr key={booking.id}>
                     <td>
-                      <Link to={`/bookings/${booking.id}`}>{booking.member.fullName}</Link>
+                      <div className="cell-identity">
+                        <span className="cell-identity-primary">
+                          <Link to={`/bookings/${booking.id}`}>{booking.member.fullName}</Link>
+                        </span>
+                        <span className="cell-identity-secondary">{booking.class.title}</span>
+                      </div>
                     </td>
-                    <td>{booking.class.title}</td>
                     <td>
-                      <Link to={`/sessions/${booking.session.id}`}>
-                        {new Date(booking.session.startsAt).toLocaleString()}
+                      <Link to={`/sessions/${booking.session.id}`} className="metadata-chip">
+                        <Icon name="calendar" size={13} />
+                        {new Date(booking.session.startsAt).toLocaleString(undefined, {
+                          month: 'short',
+                          day: 'numeric',
+                          hour: 'numeric',
+                          minute: '2-digit',
+                        })}
                       </Link>
                     </td>
                     <td>
                       <StatusBadge status={booking.status} />
                     </td>
-                    <td>{new Date(booking.bookedAt).toLocaleString()}</td>
+                    <td>
+                      <span className="cell-identity-secondary">
+                        {new Date(booking.bookedAt).toLocaleString(undefined, {
+                          month: 'short',
+                          day: 'numeric',
+                          hour: 'numeric',
+                          minute: '2-digit',
+                        })}
+                      </span>
+                    </td>
                     <td className="col-actions">
                       <div className="table-actions">
                         {canCancel ? (
                           <button
                             type="button"
-                            className="btn btn-danger btn-small"
+                            className="btn btn-ghost-danger btn-small"
                             onClick={() => setCancelTarget(booking)}
                           >
                             Cancel

@@ -425,6 +425,99 @@ describe('GET /api/sessions — collection scoping with a classId filter', () =>
   });
 });
 
+describe('GET /api/sessions — bookedCount', () => {
+  async function insertMember() {
+    const [member] = await db('members')
+      .insert({
+        full_name: 'Sessions List Booked-Count Member',
+        email: `sessions-list-booked-count-${Date.now()}-${Math.random().toString(36).slice(2)}@example.com`,
+        membership_expires_on: '2099-01-01',
+      })
+      .returning('*');
+    return member;
+  }
+
+  async function bookMember(cookie, sessionId, memberId) {
+    const res = await server.request({
+      method: 'POST',
+      path: '/api/bookings',
+      cookie,
+      body: { sessionId: String(sessionId), memberId: String(memberId) },
+    });
+    assert.equal(res.status, 201, res.raw);
+    return res.json.booking;
+  }
+
+  it('reports booked/attended/no_show seats but never waitlisted or cancelled ones, computed as one batch query not one per session', async () => {
+    const cookie = await loginAs(fixture.staff);
+
+    // Once a real booking is attached, this session becomes permanently
+    // undeletable (`bookings.session_id` is `ON DELETE RESTRICT`) — the same
+    // reasoning the "booking-aware capacity and reschedule rules" describe
+    // block below documents in full. This test therefore gets its own
+    // throwaway class and room rather than `fixture.class`/a shared room,
+    // and its session id is deliberately never pushed onto the shared
+    // `createdSessionIds` array: an undeletable id in that array would fail
+    // the generic bulk `after()` delete for every other test's cleanup too.
+    const classRes = await server.request({
+      method: 'POST',
+      path: '/api/classes',
+      cookie,
+      body: {
+        title: 'Sessions List Booked-Count Class',
+        discipline: 'Testing',
+        defaultDurationMinutes: 30,
+        defaultCapacity: 2,
+      },
+    });
+    assert.equal(classRes.status, 201, classRes.raw);
+    const [room] = await db('rooms')
+      .insert({ name: `Sessions List Booked-Count Room ${Date.now()}` })
+      .returning('*');
+
+    const created = await createSession(cookie, {
+      classId: classRes.json.class.id,
+      roomId: room.id,
+      startsAt: at(900 + Math.floor(Math.random() * 20_000)).toISOString(),
+      capacity: 2,
+    });
+    assert.equal(created.status, 201, created.raw);
+    const sessionId = created.json.session.id;
+
+    const [m1, m2, m3] = await Promise.all([insertMember(), insertMember(), insertMember()]);
+    await bookMember(cookie, sessionId, m1.id);
+    await bookMember(cookie, sessionId, m2.id);
+    // Capacity is 2 and both seats are now occupied — this third booking is
+    // waitlisted, not booked, and must not count toward `bookedCount`.
+    const waitlisted = await bookMember(cookie, sessionId, m3.id);
+    assert.equal(waitlisted.status, 'waitlisted');
+
+    const list = await server.request({
+      method: 'GET',
+      path: `/api/sessions?classId=${classRes.json.class.id}`,
+      cookie,
+    });
+    assert.equal(list.status, 200);
+    const listed = list.json.sessions.find((s) => s.id === sessionId);
+    assert.ok(listed, 'the fixture session must appear in its own class-filtered list');
+    assert.equal(listed.bookedCount, 2);
+  });
+
+  it('reports zero for a session with no bookings, rather than omitting the field', async () => {
+    const cookie = await loginAs(fixture.staff);
+    const created = await createSession(cookie, { startsAt: at(910).toISOString() });
+    createdSessionIds.push(created.json.session.id);
+
+    const list = await server.request({
+      method: 'GET',
+      path: `/api/sessions?classId=${fixture.class.id}`,
+      cookie,
+    });
+    const listed = list.json.sessions.find((s) => s.id === created.json.session.id);
+    assert.equal(listed.bookedCount, 0);
+  });
+});
+
 describe('PATCH /api/sessions/:id', () => {
   it('lets staff update a session', async () => {
     const cookie = await loginAs(fixture.staff);

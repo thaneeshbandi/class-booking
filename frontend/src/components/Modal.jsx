@@ -3,7 +3,7 @@ import { useEffect } from 'react';
 /** A minimal, dependency-free modal — a fixed overlay plus a centered panel.
  * No focus trap or animation library; correctness and keyboard-dismiss
  * (Escape) are what matter here, not polish. */
-export function Modal({ title, onClose, children, width }) {
+export function Modal({ title, subtitle, onClose, children, width }) {
   useEffect(() => {
     function handleKeyDown(event) {
       if (event.key === 'Escape') onClose();
@@ -23,7 +23,10 @@ export function Modal({ title, onClose, children, width }) {
         onClick={(event) => event.stopPropagation()}
       >
         <div className="modal-header">
-          <h2 id="modal-title">{title}</h2>
+          <div>
+            <h2 id="modal-title">{title}</h2>
+            {subtitle ? <p className="modal-subtitle">{subtitle}</p> : null}
+          </div>
           <button type="button" className="modal-close" onClick={onClose} aria-label="Close">
             ×
           </button>

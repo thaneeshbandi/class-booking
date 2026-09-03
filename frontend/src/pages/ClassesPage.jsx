@@ -2,6 +2,7 @@ import { useEffect, useState } from 'react';
 
 import { archiveClass, createClass, fetchClasses, restoreClass, updateClass } from '../api/classes.js';
 import { Badge } from '../components/Badge.jsx';
+import { Icon } from '../components/Icon.jsx';
 import { Modal } from '../components/Modal.jsx';
 import { EmptyState, ErrorBanner, LoadingState } from '../components/States.jsx';
 
@@ -179,6 +180,7 @@ export function ClassesPage() {
           </p>
         </div>
         <button type="button" className="btn btn-primary" onClick={() => setModal('create')}>
+          <Icon name="plus" size={16} />
           Create class
         </button>
       </div>
@@ -197,17 +199,21 @@ export function ClassesPage() {
       {loading ? <LoadingState label="Loading classes…" /> : null}
       {error ? <ErrorBanner error={error} onRetry={load} /> : null}
       {actionError ? <ErrorBanner error={actionError} /> : null}
-      {!loading && !error && classes?.length === 0 ? <EmptyState label="No classes yet." /> : null}
+      {!loading && !error && classes?.length === 0 ? (
+        <EmptyState
+          icon="classes"
+          label="No classes yet."
+          action={{ label: 'Create your first class', onClick: () => setModal('create') }}
+        />
+      ) : null}
 
       {!loading && !error && classes?.length > 0 ? (
         <div className="table-scroll">
         <table className="table">
           <thead>
             <tr>
-              <th>Title</th>
-              <th>Discipline</th>
-              <th className="numeric">Duration</th>
-              <th className="numeric">Capacity</th>
+              <th>Class</th>
+              <th>Details</th>
               <th>Status</th>
               <th className="col-actions">Actions</th>
             </tr>
@@ -215,10 +221,22 @@ export function ClassesPage() {
           <tbody>
             {classes.map((klass) => (
               <tr key={klass.id}>
-                <td>{klass.title}</td>
-                <td>{klass.discipline}</td>
-                <td className="numeric">{klass.defaultDurationMinutes} min</td>
-                <td className="numeric">{klass.defaultCapacity}</td>
+                <td>
+                  <div className="cell-identity">
+                    <span className="cell-identity-primary">{klass.title}</span>
+                    <span className="cell-identity-secondary">{klass.discipline}</span>
+                  </div>
+                </td>
+                <td>
+                  <span className="metadata-chip">
+                    <Icon name="clock" size={13} />
+                    {klass.defaultDurationMinutes} min
+                  </span>
+                  <span className="metadata-chip">
+                    <Icon name="users" size={13} />
+                    {klass.defaultCapacity} capacity
+                  </span>
+                </td>
                 <td>
                   {klass.archivedAt ? (
                     <Badge tone="tone-gray">Archived</Badge>
@@ -233,6 +251,7 @@ export function ClassesPage() {
                     className="btn btn-secondary btn-small"
                     onClick={() => setModal(klass)}
                   >
+                    <Icon name="edit" size={13} />
                     Edit
                   </button>
                   <button
@@ -240,6 +259,7 @@ export function ClassesPage() {
                     className="btn btn-secondary btn-small"
                     onClick={() => handleArchiveToggle(klass)}
                   >
+                    <Icon name={klass.archivedAt ? 'restore' : 'archive'} size={13} />
                     {klass.archivedAt ? 'Restore' : 'Archive'}
                   </button>
                 </div>
@@ -252,7 +272,15 @@ export function ClassesPage() {
       ) : null}
 
       {modal ? (
-        <Modal title={modal === 'create' ? 'Create class' : 'Edit class'} onClose={() => setModal(null)}>
+        <Modal
+          title={modal === 'create' ? 'Create class' : 'Edit class'}
+          subtitle={
+            modal === 'create'
+              ? 'Add a new class to the studio catalog.'
+              : `Editing "${modal.title}".`
+          }
+          onClose={() => setModal(null)}
+        >
           <ClassForm
             initial={modal === 'create' ? null : modal}
             onCancel={() => setModal(null)}

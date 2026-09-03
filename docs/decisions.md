@@ -422,3 +422,62 @@ backend/src/domain/sessionConflicts.js`), not invented for this file.
   misalignment. An explicit pixel width removes that dependency entirely; the placeholder is not purely
   cosmetic — Playwright's own alignment test (`polish.spec.js`) asserts on it directly, and a rendered
   "nothing to do here" is a clearer signal than a blank cell a screen reader would skip past silently.
+
+## Decision 29
+
+- **Chose:** A hand-rolled set of ~25 inline SVG icons (`components/Icon.jsx`, one 20x20 stroke-path
+  object, `stroke="currentColor"`) rather than an icon library.
+- **Rejected:** `lucide-react`, `heroicons`, or a similar package; emoji as UI icons.
+- **Why:** The milestone's own instructions allow "a tiny icon dependency... only if genuinely useful;
+  otherwise use small inline SVG icon components" — the second option was strictly smaller: this
+  project's entire icon need is a fixed set of ~25 shapes reused throughout the app (nav items, table
+  actions, metric cards, timeline markers), never a searchable library of thousands. A hand-rolled set
+  adds zero dependencies, zero version-pinning surface, and `currentColor` means every icon
+  automatically matches its surrounding text/button color with no extra prop, the same way the rest of
+  this project prefers a five-line CSV escaper over a CSV package (see the CORS/cookie-parsing
+  precedents in `docs/decisions.md`'s earlier entries). Emoji were explicitly ruled out by the
+  milestone's own instructions and would in any case render inconsistently across platforms — a real
+  risk for a "professional SaaS" visual target.
+
+## Decision 30
+
+- **Chose:** A real off-canvas drawer for mobile navigation (`AppShell.jsx`, `position: fixed`,
+  translated off-screen by default, opened by a topbar hamburger toggle, closed on navigation or by its
+  own backdrop) below 800px, replacing the previous milestone's approach of shrinking the desktop
+  sidebar into a horizontally-scrolling strip pinned to the top of the page.
+- **Rejected:** Keeping the shrunk-sidebar pattern (simpler, already built, but explicitly what this
+  milestone's own instructions ruled out: "turn navigation into a proper mobile navigation pattern —
+  don't just shrink the desktop sidebar").
+- **Why:** The shrunk sidebar permanently occupied a strip of every mobile page's vertical space and
+  made every nav label small and cramped regardless of how few items needed to fit — a real UX cost paid
+  on every single page load, for navigation used only occasionally. An off-canvas drawer costs nothing
+  when closed (the default state) and, when open, gets the same full-size labels and icons the desktop
+  sidebar already has, rather than a visually distinct, worse "mobile version" of the same information.
+  This did require updating `responsive.spec.js`'s own nav-interaction helper (open the drawer, then
+  click the link) — a real, correctly-flagged consequence of the behavior actually changing, not a test
+  weakened to paper over a regression.
+
+## Decision 31
+
+- **Chose:** A `bookedCount` field added to `GET /api/sessions`'s list response — a single batched
+  `LEFT JOIN` aggregate over `bookings` (grouped by `session_id`, filtered to the same `booked`/
+  `attended`/`no_show` "occupied" statuses `countOccupiedSeats` already uses for the capacity-decrease
+  rule), not a per-session query.
+- **Rejected:** Leaving the Sessions list without any occupancy indicator (matching the milestone's own
+  general instruction to avoid backend changes); calling `countOccupiedSeats` once per row in a loop.
+- **Why:** The milestone explicitly asked the sessions list to show "booking occupancy" and separately
+  said not to change backend business rules "unless absolutely necessary for the UI" — there was no way
+  to show real occupancy without either a backend addition or an N+1 client-side fetch loop (one request
+  per visible session), and the second option is exactly the query-shape antipattern this project's own
+  architecture review (Session 8's audit) already checked the whole codebase for. A batched aggregate
+  keeps the list endpoint at one query, reuses the existing, already-tested definition of "occupied"
+  rather than inventing a second one, and changes nothing about any write path, authorization check, or
+  business rule — purely additive read-only data. `OCCUPYING_STATUSES` was exported from
+  `bookingTransaction.js` specifically so the two call sites can never quietly define "occupied"
+  differently. New tests (`tests/sessions.test.js`, "GET /api/sessions — bookedCount") needed the same
+  dedicated-throwaway-class-and-room treatment this file's own P6 describe block already documents for
+  any session that ends up with a real booking attached (see that block's own comment) — the first
+  version of this test used the shared `fixture.class`/default room instead and left a permanently
+  undeletable session blocking that fixture's own cleanup, caught by the full suite failing on an
+  unrelated, later test and root-caused by reading this exact file's own established pattern rather than
+  inventing a new one.

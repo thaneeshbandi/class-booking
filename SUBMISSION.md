@@ -23,7 +23,7 @@ request can take up to a minute.>
 
 | Layer | What you used | Why |
 |-------|---------------|-----|
-| Frontend | React 18 + Vite, plain JavaScript, hand-written CSS (no component library, no TypeScript) | Built after every server-side goal was done, tested, and audited — see `docs/architecture.md` |
+| Frontend | React 18 + Vite, plain JavaScript, hand-written CSS design system (tokens, shared component classes), ~25 hand-rolled inline SVG icons (no icon library, no component framework, no TypeScript) | Built after every server-side goal was done, tested, and audited; visually redesigned in a later milestone — see `docs/architecture.md` and `docs/decisions.md`, Decision 29 |
 | Backend | Node.js, Express, Knex (query builder + migrations) over `pg` | See `docs/decisions.md` |
 | Database | PostgreSQL 17 (Docker locally; not yet deployed) | See `docs/schema.md` |
 | Hosting | Not deployed yet | Frontend and backend are both complete; deployment itself hasn't happened yet |
@@ -56,11 +56,26 @@ deliberately not built" section and `docs/decisions.md`, Decision 27.
 
 ## Verification
 
-What was actually run, most recently: backend `npm test` — 404 tests, 403 passing, 1 skipped (an
-`APP_DB_URL`-gated schema test, skipped whenever that optional role isn't configured, same as every
-earlier run) — run twice, then again after a fresh `npm run db:reset` (now applying all 11 migrations);
-`npm run lint` clean on both `backend/` and `frontend/`; `npm run build` clean on `frontend/`. Full
-detail, including every session's exact commands and results, is in `docs/plan.md`.
+What was actually run, most recently: backend `npm test --test-concurrency=1` — 406 tests, 405 passing,
+1 skipped (an `APP_DB_URL`-gated schema test, skipped whenever that optional role isn't configured, same
+as every earlier run) — run twice, then again after a fresh `npm run db:reset` (now applying all 11
+migrations); `npm run lint` clean on both `backend/` and `frontend/`; `npm run build` clean on
+`frontend/`. Full detail, including every session's exact commands and results, is in `docs/plan.md`.
+
+**The frontend was fully visually redesigned in a later milestone**, on top of the same backend and the
+same 41 Playwright tests (28 needed no changes at all; a handful were updated to match intentional
+behavior changes — a real off-canvas mobile nav drawer and a dashboard greeting heading — not to paper
+over regressions; full detail in `docs/plan.md`'s Session 12 and `docs/ai-prompts.md`). Design tokens, a
+hand-rolled icon set, a redesigned app shell (icon-led sidebar, topbar avatar, real mobile drawer
+navigation), split-screen Login/Signup pages, and every other page rebuilt on the new shared component
+classes. One small, genuine backend addition — `bookedCount` on `GET /api/sessions`, a single batched
+aggregate query, not a per-row loop (see `docs/decisions.md`, Decision 31) — was the only backend change
+this milestone made. Verification included an actual visual audit: the real running app launched with
+Playwright and its screenshots inspected (not assumed) at 375px, 768px, 1024px, and 1440px across every
+page this milestone's own instructions listed, which is what caught five real issues (a missing
+`text-decoration` on the shared button class, a locator collision between a new dashboard link and the
+existing "Members" nav link, two Playwright assertions that needed updating for intentional UI changes,
+and a test-fixture cleanup bug in the new backend test) before any of them shipped.
 
 **End-to-end frontend verification was performed with real Playwright browser automation** — Chromium,
 via `@playwright/test`, actually launching a browser and driving the real running frontend against the

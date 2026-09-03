@@ -3,12 +3,19 @@ import { Link, useParams } from 'react-router-dom';
 
 import { fetchBooking } from '../api/bookings.js';
 import { StatusBadge } from '../components/Badge.jsx';
+import { Icon } from '../components/Icon.jsx';
 import { ErrorBanner, LoadingState } from '../components/States.jsx';
 
 const EVENT_LABEL = {
   created: 'Created',
   status_changed: 'Status changed',
   note: 'Note added',
+};
+
+const EVENT_ICON = {
+  created: 'check',
+  status_changed: 'chevronRight',
+  note: 'edit',
 };
 
 export function BookingDetailPage() {
@@ -39,25 +46,46 @@ export function BookingDetailPage() {
   return (
     <div>
       <div className="page-header">
-        <h1>Booking #{booking.id}</h1>
+        <div className="page-header-text">
+          <h1>Booking #{booking.id}</h1>
+          <p className="page-subtitle">{booking.member.fullName}</p>
+        </div>
         <Link to={`/sessions/${booking.sessionId}`} className="btn btn-secondary">
           View session
         </Link>
       </div>
 
       <section className="card">
-        <dl className="detail-list">
-          <dt>Member</dt>
-          <dd>
-            {booking.member.fullName} ({booking.member.email})
-          </dd>
-          <dt>Status</dt>
-          <dd>
-            <StatusBadge status={booking.status} />
-          </dd>
-          <dt>Booked at</dt>
-          <dd>{new Date(booking.createdAt).toLocaleString()}</dd>
-        </dl>
+        <div className="session-summary-grid">
+          <div className="session-summary-item">
+            <span className="session-summary-icon">
+              <Icon name="members" size={16} />
+            </span>
+            <div>
+              <div className="session-summary-label">Member</div>
+              <div className="session-summary-value">{booking.member.fullName}</div>
+              <div className="cell-identity-secondary">{booking.member.email}</div>
+            </div>
+          </div>
+          <div className="session-summary-item">
+            <span className="session-summary-icon">
+              <Icon name="alerts" size={16} />
+            </span>
+            <div>
+              <div className="session-summary-label">Status</div>
+              <StatusBadge status={booking.status} />
+            </div>
+          </div>
+          <div className="session-summary-item">
+            <span className="session-summary-icon">
+              <Icon name="clock" size={16} />
+            </span>
+            <div>
+              <div className="session-summary-label">Booked at</div>
+              <div className="session-summary-value">{new Date(booking.createdAt).toLocaleString()}</div>
+            </div>
+          </div>
+        </div>
       </section>
 
       <section className="card">
@@ -68,7 +96,9 @@ export function BookingDetailPage() {
         <ul className="timeline">
           {events.map((event) => (
             <li key={event.id} className="timeline-item">
-              <div className="timeline-marker" />
+              <div className="timeline-marker">
+                <Icon name={EVENT_ICON[event.eventType] ?? 'inbox'} size={11} />
+              </div>
               <div>
                 <div className="timeline-title">
                   {EVENT_LABEL[event.eventType] ?? event.eventType}

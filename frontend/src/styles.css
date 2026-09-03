@@ -23,6 +23,10 @@
   --color-warning-bg: #fdf1da;
   --color-warning-text: #8a5a09;
   --color-warning-border: #f2ddab;
+  --color-info-bg: #e6edfc;
+  --color-info-text: #2148a8;
+  --color-info-border: #c7d6f7;
+  --color-surface-elevated: #ffffff;
 
   --tone-blue-bg: #e6edfc;
   --tone-blue-text: #2148a8;
@@ -39,6 +43,7 @@
   --radius-sm: 7px;
   --radius-pill: 999px;
   --shadow-card: 0 1px 2px rgba(16, 24, 40, 0.05), 0 1px 1px rgba(16, 24, 40, 0.04);
+  --shadow-card-elevated: 0 4px 14px rgba(16, 24, 40, 0.09), 0 1px 2px rgba(16, 24, 40, 0.06);
   --shadow-modal: 0 20px 50px rgba(15, 18, 26, 0.28);
   --shadow-focus: 0 0 0 3px rgba(47, 95, 219, 0.28);
   --sidebar-width: 232px;
@@ -148,27 +153,19 @@ textarea:focus-visible,
   padding: 0 22px 24px;
   display: flex;
   align-items: center;
-  gap: 8px;
+  gap: 10px;
 }
 
-.sidebar-brand::before {
-  content: '';
-  width: 9px;
-  height: 9px;
-  border-radius: 3px;
+.sidebar-brand-mark {
+  width: 28px;
+  height: 28px;
+  border-radius: var(--radius-sm);
   background: var(--color-primary);
-  display: inline-block;
+  color: #fff;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
   flex-shrink: 0;
-}
-
-.sidebar-section-label {
-  padding: 0 22px;
-  font-size: 10.5px;
-  font-weight: 700;
-  letter-spacing: 0.08em;
-  text-transform: uppercase;
-  color: #6b7386;
-  margin: 14px 0 6px;
 }
 
 .sidebar-nav {
@@ -176,18 +173,28 @@ textarea:focus-visible,
   flex-direction: column;
   gap: 1px;
   padding: 0 10px;
+  flex: 1;
 }
 
 .sidebar-link {
   display: flex;
   align-items: center;
-  justify-content: space-between;
+  gap: 11px;
   padding: 9px 12px;
   color: #b7bfd1;
   text-decoration: none;
   border-radius: var(--radius-sm);
   font-weight: 500;
   transition: background-color 120ms ease, color 120ms ease;
+}
+
+.sidebar-link-label {
+  flex: 1;
+}
+
+.sidebar-link svg {
+  opacity: 0.8;
+  flex-shrink: 0;
 }
 
 .sidebar-link:hover {
@@ -199,6 +206,10 @@ textarea:focus-visible,
   background: var(--color-primary);
   color: #fff;
   font-weight: 600;
+}
+
+.sidebar-link.active svg {
+  opacity: 1;
 }
 
 .sidebar-link:focus-visible {
@@ -218,6 +229,39 @@ textarea:focus-visible,
   line-height: 1.5;
 }
 
+.sidebar-footer {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  padding: 14px 20px;
+  margin-top: auto;
+  border-top: 1px solid rgba(255, 255, 255, 0.08);
+}
+
+.sidebar-footer-text {
+  min-width: 0;
+}
+
+.sidebar-footer-name {
+  color: #fff;
+  font-size: 13px;
+  font-weight: 600;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+.avatar {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  border-radius: 50%;
+  background: var(--color-primary-bg);
+  color: var(--color-primary-hover);
+  font-weight: 700;
+  flex-shrink: 0;
+}
+
 .app-main {
   flex: 1;
   min-width: 0;
@@ -228,21 +272,69 @@ textarea:focus-visible,
 .topbar {
   display: flex;
   align-items: center;
-  justify-content: flex-end;
+  justify-content: space-between;
   gap: var(--space-4);
-  padding: 14px var(--space-5);
+  padding: 12px var(--space-5);
   background: var(--color-surface);
   border-bottom: 1px solid var(--color-border);
+  box-shadow: 0 1px 0 rgba(16, 24, 40, 0.02);
+}
+
+.topbar-left {
+  display: flex;
+  align-items: center;
+  gap: var(--space-3);
+  min-width: 0;
+}
+
+.topbar-page-label {
+  font-weight: 600;
+  font-size: 14.5px;
+  color: var(--color-text);
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+.mobile-nav-toggle {
+  display: none;
+  align-items: center;
+  justify-content: center;
+  width: 34px;
+  height: 34px;
+  border-radius: var(--radius-sm);
+  border: 1px solid var(--color-border-strong);
+  background: var(--color-surface);
+  color: var(--color-text);
+  cursor: pointer;
+  flex-shrink: 0;
+}
+
+.mobile-nav-toggle:hover {
+  background: var(--color-surface-muted);
 }
 
 .topbar-user {
   display: flex;
   align-items: center;
-  gap: var(--space-2);
+  gap: var(--space-3);
+  flex-shrink: 0;
+}
+
+.topbar-user-text {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+  line-height: 1.2;
 }
 
 .user-name {
   font-weight: 600;
+  font-size: 13.5px;
+}
+
+.topbar-user .badge {
+  align-self: flex-start;
 }
 
 .app-content {
@@ -256,35 +348,69 @@ textarea:focus-visible,
   overflow-x: auto;
 }
 
+.mobile-nav-backdrop {
+  display: none;
+}
+
+/* Below 800px the sidebar becomes a proper off-canvas drawer — not the
+ * desktop sidebar simply shrunk (that pattern makes every nav label
+ * illegible and still eats vertical space on every page). Closed by
+ * default (off-screen via `translateX`), opened by the topbar's hamburger
+ * toggle, and dismissible by its own backdrop, an Escape-independent click
+ * target, or navigating anywhere (see `AppShell`'s own effect). */
 @media (max-width: 800px) {
   .app-shell {
     flex-direction: column;
   }
+
+  .mobile-nav-toggle {
+    display: inline-flex;
+  }
+
+  .topbar-page-label {
+    font-size: 15.5px;
+  }
+
   .sidebar {
-    width: 100%;
-    flex-direction: row;
-    align-items: center;
-    overflow-x: auto;
-    padding: 10px 12px;
+    position: fixed;
+    inset: 0 auto 0 0;
+    width: 260px;
+    max-width: 82vw;
+    z-index: 210;
+    transform: translateX(-100%);
+    transition: transform 200ms ease;
+    box-shadow: 0 0 0 rgba(0, 0, 0, 0);
   }
-  .sidebar-brand {
-    display: none;
+
+  .app-shell.mobile-nav-open .sidebar {
+    transform: translateX(0);
+    box-shadow: 12px 0 32px rgba(15, 18, 26, 0.18);
   }
-  .sidebar-section-label {
-    display: none;
-  }
-  .sidebar-nav {
-    flex-direction: row;
+
+  .app-shell.mobile-nav-open .mobile-nav-backdrop {
+    display: block;
+    position: fixed;
+    inset: 0;
+    background: rgba(15, 18, 26, 0.45);
+    border: none;
     padding: 0;
+    margin: 0;
+    z-index: 200;
+    cursor: pointer;
   }
-  .sidebar-link {
-    white-space: nowrap;
-  }
+
   .app-content {
     padding: var(--space-4);
   }
+
   .topbar {
-    padding: 12px var(--space-4);
+    padding: 10px var(--space-4);
+  }
+}
+
+@media (max-width: 520px) {
+  .topbar-user-text {
+    display: none;
   }
 }
 
@@ -293,51 +419,122 @@ textarea:focus-visible,
 .auth-screen {
   min-height: 100vh;
   display: flex;
-  align-items: center;
-  justify-content: center;
-  background:
-    radial-gradient(circle at 15% 20%, rgba(47, 95, 219, 0.08), transparent 40%),
-    radial-gradient(circle at 85% 80%, rgba(47, 95, 219, 0.06), transparent 40%),
-    var(--color-bg);
-  padding: var(--space-4);
 }
 
-.auth-card {
-  background: var(--color-surface);
-  border: 1px solid var(--color-border);
-  border-radius: var(--radius);
-  box-shadow: var(--shadow-card);
-  padding: 36px;
-  width: 100%;
-  max-width: 360px;
+.auth-brand-panel {
+  flex: 1 1 42%;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  padding: var(--space-6);
+  background:
+    radial-gradient(circle at 20% 15%, rgba(47, 95, 219, 0.35), transparent 45%),
+    radial-gradient(circle at 85% 85%, rgba(47, 95, 219, 0.2), transparent 45%),
+    #14182b;
+  color: #dfe3ee;
+}
+
+.auth-brand-panel-inner {
+  max-width: 420px;
+}
+
+.auth-brand-panel .auth-brand-statement {
+  font-size: 19px;
+  line-height: 1.5;
+  font-weight: 500;
+  color: #fff;
+  margin: 0 0 var(--space-6);
+  letter-spacing: -0.01em;
+}
+
+.auth-capability-list {
+  list-style: none;
+  margin: 0;
+  padding: 0;
   display: flex;
   flex-direction: column;
+  gap: var(--space-4);
+}
+
+.auth-capability-list li {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  font-size: 14px;
+  color: #c3c9db;
+}
+
+.auth-capability-icon {
+  width: 32px;
+  height: 32px;
+  border-radius: var(--radius-sm);
+  background: rgba(255, 255, 255, 0.08);
+  color: #fff;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  flex-shrink: 0;
+}
+
+.auth-form-panel {
+  flex: 1 1 58%;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  padding: var(--space-4);
+  background: var(--color-surface);
+}
+
+.auth-form-panel-inner {
+  width: 100%;
+  max-width: 360px;
 }
 
 .auth-brand {
   display: flex;
   align-items: center;
-  gap: 9px;
-  margin-bottom: var(--space-2);
+  gap: 10px;
 }
 
 .auth-brand-mark {
-  width: 11px;
-  height: 11px;
-  border-radius: 3px;
+  width: 32px;
+  height: 32px;
+  border-radius: var(--radius-sm);
   background: var(--color-primary);
+  color: #fff;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
   flex-shrink: 0;
 }
 
-.auth-brand h1 {
-  margin: 0;
-  font-size: 19px;
+.auth-brand-name {
+  font-weight: 700;
+  font-size: 16px;
+  letter-spacing: -0.01em;
+}
+
+.auth-brand-panel .auth-brand-name {
+  color: #fff;
+}
+
+.auth-brand-mobile {
+  display: none;
+  margin-bottom: var(--space-5);
+}
+
+.auth-form-panel-inner h1 {
+  margin-top: var(--space-5);
 }
 
 .auth-subtitle {
   color: var(--color-text-muted);
-  margin: 0 0 var(--space-5);
+  margin: 0 0 var(--space-4);
   font-size: 13.5px;
+}
+
+.auth-workspace-tag {
+  margin-bottom: var(--space-4);
 }
 
 .auth-footer {
@@ -356,6 +553,21 @@ textarea:focus-visible,
 
 .auth-footer a:hover {
   text-decoration: underline;
+}
+
+@media (max-width: 860px) {
+  .auth-brand-panel {
+    display: none;
+  }
+  .auth-form-panel {
+    flex: 1 1 100%;
+  }
+  .auth-brand-mobile {
+    display: flex;
+  }
+  .auth-form-panel-inner h1 {
+    margin-top: 0;
+  }
 }
 
 /* --- cards / grids ------------------------------------------------------ */
@@ -395,8 +607,24 @@ textarea:focus-visible,
   box-shadow: var(--shadow-card);
   padding: 18px 20px;
   display: flex;
-  flex-direction: column;
-  gap: 6px;
+  align-items: center;
+  gap: 14px;
+  transition: box-shadow 150ms ease, border-color 150ms ease;
+}
+
+.stat-card:hover {
+  box-shadow: var(--shadow-card-elevated);
+  border-color: var(--color-border-strong);
+}
+
+.stat-icon {
+  width: 40px;
+  height: 40px;
+  border-radius: var(--radius-sm);
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  flex-shrink: 0;
 }
 
 .stat-value {
@@ -423,6 +651,127 @@ textarea:focus-visible,
   margin-bottom: 0;
   display: flex;
   flex-direction: column;
+}
+
+.dashboard-alert-banner {
+  display: flex;
+  align-items: center;
+  gap: var(--space-3);
+  background: var(--color-warning-bg);
+  border: 1px solid var(--color-warning-border);
+  color: var(--color-warning-text);
+  border-radius: var(--radius);
+  padding: 13px var(--space-4);
+  margin-bottom: var(--space-5);
+  font-size: 13.5px;
+}
+
+.dashboard-alert-icon {
+  width: 30px;
+  height: 30px;
+  border-radius: 50%;
+  background: rgba(255, 255, 255, 0.55);
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  flex-shrink: 0;
+}
+
+.dashboard-alert-link {
+  margin-left: auto;
+  flex-shrink: 0;
+  display: inline-flex;
+  align-items: center;
+  gap: 3px;
+  font-weight: 600;
+  color: inherit;
+  text-decoration: none;
+  white-space: nowrap;
+}
+
+.dashboard-alert-link:hover {
+  text-decoration: underline;
+}
+
+/* A horizontal-bar comparison, scaled relative to the largest class, capped
+ * to a fixed viewport height with its own scroll — this replaced a plain,
+ * unbounded table that could run to dozens of rows and made every class
+ * look equally weighted regardless of its actual booking volume. */
+.class-breakdown {
+  display: flex;
+  flex-direction: column;
+  gap: 12px;
+  max-height: 320px;
+  overflow-y: auto;
+  padding-right: 4px;
+}
+
+.class-breakdown-row {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) minmax(60px, 30%) 28px;
+  align-items: center;
+  gap: 10px;
+}
+
+.class-breakdown-title {
+  font-size: 13px;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+.class-breakdown-bar-track {
+  height: 8px;
+  border-radius: var(--radius-pill);
+  background: var(--color-surface-muted);
+  overflow: hidden;
+}
+
+.class-breakdown-bar {
+  height: 100%;
+  border-radius: var(--radius-pill);
+  background: var(--color-primary);
+}
+
+.class-breakdown-count {
+  font-size: 12.5px;
+  font-weight: 600;
+  color: var(--color-text-muted);
+  text-align: right;
+  font-variant-numeric: tabular-nums;
+}
+
+.status-breakdown {
+  display: flex;
+  flex-direction: column;
+  gap: 14px;
+}
+
+.status-breakdown-row {
+  display: grid;
+  grid-template-columns: 90px 1fr 28px;
+  align-items: center;
+  gap: 10px;
+}
+
+.tone-bar-booked {
+  background: var(--tone-blue-text);
+}
+
+.tone-bar-waitlisted {
+  background: var(--tone-amber-text);
+}
+
+.tone-bar-cancelled {
+  background: var(--tone-gray-text);
+}
+
+.tone-bar-attended {
+  background: var(--tone-green-text);
+}
+
+.tone-bar-no_show {
+  background: var(--tone-red-text);
 }
 
 /* --- bar chart ------------------------------------------------------------*/
@@ -564,6 +913,104 @@ textarea:focus-visible,
   color: var(--color-text-faint);
 }
 
+/* A row's primary identity (a class title, a member's name, a booking's
+ * member) paired with secondary detail underneath — used everywhere a table
+ * cell used to be one flat line of text with no hierarchy between the thing
+ * that matters most and its supporting detail. */
+.cell-identity {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+}
+
+.cell-identity-primary {
+  font-weight: 600;
+  color: var(--color-text);
+}
+
+.cell-identity-primary a {
+  color: inherit;
+  text-decoration: none;
+}
+
+.cell-identity-primary a:hover {
+  color: var(--color-primary);
+  text-decoration: underline;
+}
+
+.cell-identity-secondary {
+  font-size: 12.5px;
+  color: var(--color-text-muted);
+}
+
+/* A small icon + text unit for metadata that used to be a bare number in
+ * its own column (a duration, a capacity, a room) — self-labeling via the
+ * icon rather than requiring a separate header to explain what the number
+ * means. */
+.metadata-chip {
+  display: inline-flex;
+  align-items: center;
+  gap: 5px;
+  font-size: 12.5px;
+  color: var(--color-text-muted);
+  margin-right: 12px;
+  white-space: nowrap;
+}
+
+.metadata-chip svg {
+  flex-shrink: 0;
+  opacity: 0.75;
+}
+
+a.metadata-chip {
+  text-decoration: none;
+  color: var(--color-text-muted);
+}
+
+a.metadata-chip:hover {
+  color: var(--color-primary);
+  text-decoration: underline;
+}
+
+.membership-cell {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  flex-wrap: wrap;
+}
+
+.alert-summary {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  background: var(--color-warning-bg);
+  border: 1px solid var(--color-warning-border);
+  color: var(--color-warning-text);
+  border-radius: var(--radius);
+  padding: 13px var(--space-4);
+  margin-bottom: var(--space-4);
+  font-size: 13.5px;
+}
+
+.alert-summary-icon {
+  width: 32px;
+  height: 32px;
+  border-radius: 50%;
+  background: rgba(255, 255, 255, 0.55);
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  flex-shrink: 0;
+}
+
+/* A subtle left accent on the more severe rows in a mixed-severity table —
+ * not a full background tint (that would fight the badge's own color for
+ * attention), just enough to scan the table and know which rows are worse
+ * before reading any text. */
+.row-severe {
+  box-shadow: inset 3px 0 0 var(--color-danger);
+}
+
 /* --- forms ------------------------------------------------------------- */
 
 .form-label {
@@ -639,6 +1086,41 @@ textarea:focus-visible,
   gap: var(--space-3);
 }
 
+/* Visually groups a modal form into labeled sections (e.g. "Class &
+ * instructor" / "Date & time" / "Duration & capacity") rather than one
+ * undifferentiated stack of fields — a divider and a small heading between
+ * groups, not a nested card (that would be too heavy for a modal). */
+.form-section {
+  padding-bottom: var(--space-4);
+  margin-bottom: var(--space-4);
+  border-bottom: 1px solid var(--color-border);
+}
+
+.form-section-last {
+  border-bottom: none;
+  padding-bottom: 0;
+  margin-bottom: 0;
+}
+
+.form-section-title {
+  margin: 0 0 var(--space-2);
+  font-size: 11.5px;
+  font-weight: 700;
+  text-transform: uppercase;
+  letter-spacing: 0.05em;
+  color: var(--color-text-muted);
+}
+
+.filter-field {
+  display: flex;
+  flex-direction: column;
+  min-width: 200px;
+}
+
+.filter-field .form-label {
+  margin-top: 0;
+}
+
 .form-actions {
   display: flex;
   justify-content: flex-end;
@@ -685,6 +1167,26 @@ textarea:focus-visible,
   width: auto;
   min-width: 160px;
   flex: 1;
+}
+
+.search-field {
+  position: relative;
+  flex: 2;
+  min-width: 220px;
+  display: flex;
+  align-items: center;
+}
+
+.search-field-icon {
+  position: absolute;
+  left: 11px;
+  color: var(--color-text-faint);
+  pointer-events: none;
+}
+
+.search-field .form-input {
+  padding-left: 34px;
+  width: 100%;
 }
 
 .weekday-picker {
@@ -740,6 +1242,7 @@ textarea:focus-visible,
   cursor: pointer;
   font-family: inherit;
   white-space: nowrap;
+  text-decoration: none;
   transition: background-color 120ms ease, border-color 120ms ease, box-shadow 120ms ease, opacity 120ms ease;
 }
 
@@ -777,6 +1280,22 @@ textarea:focus-visible,
 
 .btn-danger:hover:not(:disabled) {
   background: var(--color-danger-hover);
+}
+
+/* A quieter destructive action for dense contexts (a table row) where a
+ * solid red button on every eligible row reads as alarm rather than a
+ * normal, available action — the confirm dialog that follows still uses
+ * `.btn-danger` at full strength for the one moment that should read as
+ * serious. */
+.btn-ghost-danger {
+  background: transparent;
+  border-color: transparent;
+  color: var(--color-danger);
+}
+
+.btn-ghost-danger:hover:not(:disabled) {
+  background: var(--color-danger-bg);
+  border-color: var(--color-danger-bg);
 }
 
 .btn-small {
@@ -854,6 +1373,61 @@ textarea:focus-visible,
   color: var(--color-text-muted);
   justify-content: center;
   padding: 28px 16px;
+}
+
+.state-empty-block {
+  flex-direction: column;
+  gap: var(--space-2);
+  text-align: center;
+}
+
+.state-empty-block p {
+  margin: 0;
+}
+
+.state-empty-icon {
+  width: 44px;
+  height: 44px;
+  border-radius: 50%;
+  background: var(--color-surface-muted);
+  color: var(--color-text-faint);
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  margin-bottom: 2px;
+}
+
+.state-error-content {
+  display: flex;
+  align-items: flex-start;
+  gap: 9px;
+}
+
+.state-error-icon {
+  flex-shrink: 0;
+  margin-top: 1px;
+}
+
+.spinner {
+  width: 15px;
+  height: 15px;
+  border-radius: 50%;
+  border: 2px solid var(--color-border-strong);
+  border-top-color: var(--color-primary);
+  animation: spin 700ms linear infinite;
+  flex-shrink: 0;
+}
+
+@keyframes spin {
+  to {
+    transform: rotate(360deg);
+  }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .spinner {
+    animation-duration: 1400ms;
+  }
 }
 
 .state-error {
@@ -934,6 +1508,12 @@ textarea:focus-visible,
   font-size: 16px;
 }
 
+.modal-subtitle {
+  margin: 3px 0 0;
+  font-size: 12.5px;
+  color: var(--color-text-muted);
+}
+
 .modal-close {
   background: none;
   border: none;
@@ -974,6 +1554,53 @@ textarea:focus-visible,
   margin: 0;
 }
 
+.session-summary-grid {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(180px, 1fr));
+  gap: var(--space-4);
+  margin-bottom: var(--space-4);
+}
+
+.session-summary-item {
+  display: flex;
+  align-items: flex-start;
+  gap: 10px;
+}
+
+.session-summary-icon {
+  width: 32px;
+  height: 32px;
+  border-radius: var(--radius-sm);
+  background: var(--color-primary-bg);
+  color: var(--color-primary-hover);
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  flex-shrink: 0;
+}
+
+.session-summary-label {
+  font-size: 12px;
+  color: var(--color-text-muted);
+  margin-bottom: 1px;
+}
+
+.session-summary-value {
+  font-weight: 600;
+  font-size: 13.5px;
+}
+
+.session-csv-btn {
+  margin-top: var(--space-2);
+}
+
+.person-chip {
+  display: inline-flex;
+  align-items: center;
+  gap: 9px;
+  font-weight: 500;
+}
+
 .plain-list {
   list-style: none;
   padding: 0;
@@ -1008,27 +1635,50 @@ textarea:focus-visible,
   padding-left: 18px;
 }
 
-.preview-note {
-  border-radius: var(--radius-sm);
-  padding: 10px 13px;
-  font-size: 13px;
-  font-weight: 500;
+/* A visually distinct preview of what submitting the recurring-generation
+ * form will actually do — set apart from the form fields above it (an
+ * icon-led card, not just another line of text) since this is the one
+ * piece of information most directly answering "what happens if I click
+ * Generate." Positive by default; a validation problem swaps both the icon
+ * and the tone to warning without changing the card's own shape. */
+.preview-card {
+  display: flex;
+  align-items: flex-start;
+  gap: 12px;
+  border-radius: var(--radius);
+  padding: 14px 16px;
   margin: var(--space-2) 0 var(--space-3);
-  border: 1px solid var(--color-border);
-  background: var(--color-surface-muted);
-  color: var(--color-text-muted);
-}
-
-.preview-note.is-positive {
+  border: 1px solid var(--color-success-border);
   background: var(--color-success-bg);
-  border-color: var(--color-success-border);
   color: var(--color-success-text);
 }
 
-.preview-note.is-negative {
-  background: var(--color-warning-bg);
+.preview-card.is-warning {
   border-color: var(--color-warning-border);
+  background: var(--color-warning-bg);
   color: var(--color-warning-text);
+}
+
+.preview-card-icon {
+  width: 32px;
+  height: 32px;
+  border-radius: 50%;
+  background: rgba(255, 255, 255, 0.5);
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  flex-shrink: 0;
+}
+
+.preview-card-title {
+  font-weight: 700;
+  font-size: 13.5px;
+}
+
+.preview-card-body {
+  font-size: 12.5px;
+  margin-top: 3px;
+  opacity: 0.9;
 }
 
 .timeline {
@@ -1047,19 +1697,22 @@ textarea:focus-visible,
 .timeline-item:not(:last-child)::before {
   content: '';
   position: absolute;
-  left: 4px;
-  top: 14px;
-  bottom: 0;
+  left: 11px;
+  top: 26px;
+  bottom: -6px;
   width: 1px;
   background: var(--color-border);
 }
 
 .timeline-marker {
-  width: 9px;
-  height: 9px;
+  width: 23px;
+  height: 23px;
   border-radius: 50%;
-  background: var(--color-primary);
-  margin-top: 5px;
+  background: var(--color-primary-bg);
+  color: var(--color-primary-hover);
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
   flex-shrink: 0;
 }
 

@@ -5,10 +5,10 @@ than papered over: goals 1–5 (authentication, classes, sessions, co-instructor
 foundation) were built in an earlier session whose actual prompts were not recorded anywhere this
 document can honestly draw from — `git log -- docs/ai-prompts.md` shows this file was never touched
 before the session that built goal 4. Inventing that history now would violate the one rule this file
-has to follow, so it isn't attempted. What follows is complete and accurate for the nine sessions that
+has to follow, so it isn't attempted. What follows is complete and accurate for the ten sessions that
 built goals 4, 6, 7, 8, and 10, the final pre-frontend audit, the frontend itself, its Playwright
-E2E verification, and its final UI/UX polish pass, each the one this document's respective author
-actually has a record of.
+E2E verification, its "final" UI/UX polish pass, and the full visual redesign that followed it, each
+the one this document's respective author actually has a record of.
 
 ## Implementing the booking lifecycle (goal 4)
 
@@ -673,3 +673,116 @@ the styling or DOM-wrapper structure being replaced around it.
    auto-retrying `expect(locator).toHaveText(...)`/`toBeVisible()` rather than a one-shot
    `textContent()` read, specifically because that exact race was already found and fixed once in the
    previous milestone.
+
+## Full frontend visual redesign
+
+### Prompt
+
+One long, specific instruction given at the start of this session, explicit that the previous polish
+pass had improved CSS consistency but not reached the visual quality bar wanted, and framed as
+"primarily about visual design and UX quality, not adding business functionality." In substance: audit
+every page, AppShell, and shared component first, and do not assume "tests pass" means the visual
+result is good; define real design tokens (colors including primary/soft-background/success/warning/
+danger/info, a typography scale, a spacing scale, radii for small controls/cards/large containers/
+pills, and a subtle shadow hierarchy); completely redesign the app shell (branded sidebar with icons and
+a clear active state, a topbar with avatar/name/role/logout, a proper mobile navigation pattern — not
+just the desktop sidebar shrunk); redesign Login and Signup as a strong split-screen layout with product
+branding on one side; make the Dashboard the strongest page visually (a time-of-day greeting header,
+icon-led metric cards, a visually meaningful status/class breakdown, an attention area for expiring
+memberships); redesign Classes/Members/Alerts/Sessions/Session Detail/Bookings/Booking Detail/Recurring
+Generation with stronger identity hierarchy, status treatment, metadata display, and (for Recurring) a
+distinct sectioned form with a real preview card; redesign every modal consistently (header/subtitle/
+close/footer/loading/error); build a polished reusable table system (rounded container, header
+background, row hover, a fixed aligned action column, contained horizontal scroll, strong empty states,
+clear pagination); polish every loading/empty/error/success state; standardize form controls and a
+restrained set of button variants (primary/secondary/danger/ghost); use icons thoughtfully throughout —
+small inline SVG components or, only if genuinely useful, a tiny dependency, never emoji; keep it
+professional, not flashy or overly animated; explicitly design for 375/768/1024/1440px; and, critically,
+do not consider the task complete merely because lint/build/Playwright pass — actually launch the app
+with Playwright, inspect real screenshots at desktop and 375px for every major page, and do at least one
+real visual refinement pass based on what was actually rendered, not assumed. It closed by requiring
+every existing test to keep passing, no functional/authorization regressions, documentation updated
+honestly (not fabricating visual-testing results), and one incremental commit.
+
+### What was produced
+
+A `components/Icon.jsx` (25 hand-rolled inline SVGs, Decision 29), `components/Avatar.jsx` (initials),
+`components/MetricCard.jsx`, and `components/AuthLayout.jsx` (the shared split-screen login/signup
+shell). A full-file rewrite of `styles.css` adding the requested token set (info/surface-elevated
+colors, an elevated-card shadow, `.stat-icon`/`.cell-identity`/`.metadata-chip`/`.form-section`/
+`.preview-card`/`.membership-cell`/`.alert-summary`/`.session-summary-*`/`.class-breakdown`/
+`.status-breakdown` component classes, a `.btn-ghost-danger` variant for dense-table destructive
+actions, and the off-canvas mobile-drawer rules) while preserving every existing class name the
+previous milestone's own redesign and every page already depended on. `AppShell.jsx` rewritten for
+icon-led navigation, a topbar avatar/page-context label, and a real mobile drawer (Decision 30).
+Every page rewritten to use the new components/classes: `LoginPage`/`SignupPage` (via `AuthLayout`,
+with a signup-safe, role-word-free shared brand panel and a login-only "Staff & instructor workspace"
+tag); `DashboardPage` (time-of-day greeting, icon metric cards, a class-breakdown bar comparison
+replacing an unbounded plain list, a status-breakdown bar list, an expiring-memberships attention
+banner reusing the existing `useAlertCount` hook); `ClassesPage`/`MembersPage`/`AlertsPage` (identity
+cells, a client-side-only membership status pill mirroring the alert window, an alert-count summary
+header); `SessionsPage`/`SessionDetailPage` (a sectioned Create/Edit Session modal, a room name and
+primary-instructor name now shown to every role via `GET /api/rooms`'s already-open access, an
+occupancy pill backed by a new `bookedCount` field — Decision 31 — and a status pill computed from
+`startsAt`/`endsAt`); `BookingsPage`/`BookingDetailPage` (a cohesive filter toolbar with a search icon
+built without changing the filter selects' DOM order that existing tests already address by position, a
+`.btn-ghost-danger` Cancel action, an icon-differentiated history timeline); `RecurringSessionsPage`
+(the previous milestone's own client-side validation logic unchanged, now visually grouped into
+"Session details"/"Date range"/"Schedule"/"Overrides" sections with a real preview card). One small,
+genuine backend addition: `bookedCount` on `GET /api/sessions` (migration-free, a batched aggregate
+query plus 2 new tests) — the one place a backend change was actually necessary for what the UI needed
+to show, per the milestone's own stated exception.
+
+### What was correct
+
+Preserving every existing CSS class name while rewriting the whole stylesheet, and preserving every
+existing form field `id`/`htmlFor` pairing and button/label text while restructuring page layouts, meant
+28 of the 41 existing Playwright tests needed zero changes at all across this entire redesign — proof
+those tests were genuinely role/label/text-based rather than coupled to markup structure. Screenshots
+were taken and actually inspected (not assumed) after each major page rewrite — see "What was wrong"
+below for what those screenshots caught — at both 1440px and 375px, plus a further pass at 768px and
+1024px confirming the design holds at the two breakpoints not otherwise covered by Playwright's own
+`responsive.spec.js`.
+
+### What was wrong, and what was corrected
+
+Several real issues, all caught either by a screenshot actually being looked at or by the required
+Playwright re-run — not assumed away:
+
+1. **A missing `text-decoration: none` on `.btn`**, found by inspecting the session detail page's
+   screenshot: a `<Link className="btn btn-secondary">` ("Back to sessions") rendered with a browser
+   default underline the button styling never explicitly overrode, despite `background`/`border`/
+   `color` all computing correctly (confirmed directly via `getComputedStyle`, not by guessing from the
+   screenshot alone). Fixed with one property on the shared `.btn` base class, benefiting every
+   anchor-as-button in the app at once, not just the one that was visibly wrong.
+2. **A CSS editing mistake caught by grep before it ever shipped**: mid-rewrite, three empty rule
+   bodies (`selector:has(...) { }`) were briefly left in `styles.css` — dead, meaningless CSS from an
+   abandoned approach to toggling the recurring-generation preview card's warning tone via `:has()`.
+   Caught by a deliberate sweep (`perl` regex for empty `{ }` bodies) run specifically because an
+   earlier milestone in this same project had once left a genuinely garbled CSS line unnoticed until a
+   later audit — replaced with a plain `.preview-card.is-warning` modifier class toggled from React
+   state, which is what the code should have done from the start.
+3. **Two real Playwright regressions from the AppShell redesign, both expected consequences of an
+   intentional behavior change, not accidents**: the new off-canvas mobile drawer (Decision 30) meant
+   `responsive.spec.js`'s mobile tests could no longer click sidebar links directly — they were now
+   genuinely off-screen by design, not a bug — fixed by teaching the test to open the drawer first,
+   matching the new (better) UX rather than reverting it. Separately, `staff-flow.spec.js` asserted a
+   literal `<h1>Dashboard</h1>` that the new time-of-day greeting heading intentionally replaced — fixed
+   by asserting the greeting pattern instead (`/^Good (morning|afternoon|evening), /`), not by keeping
+   the old, less friendly heading just to avoid touching a test.
+4. **A genuine locator collision, found by the Playwright run itself failing with a strict-mode
+   violation, not predicted in advance**: the new dashboard alert banner's link text, "N memberships
+   need attention," contains the substring "member" — which Playwright's case-insensitive default
+   substring matching for `getByRole('link', { name: 'Members' })` matched against, colliding with the
+   pre-existing sidebar "Members" nav link the moment both existed on the same page. Fixed not by
+   renaming the existing, widely-used "Members" nav link, but by narrowing the banner's own link to a
+   small "View" affordance — the descriptive sentence stays as plain text outside any `<a>`, which is
+   also better UX (a giant paragraph-as-link was never a good click target) as well as the fix for the
+   collision.
+5. **A repeat of Decision 31's own fixture-cleanup lesson, caught immediately by the full suite failing
+   a completely unrelated later test with a foreign-key error**: the first version of the new
+   `bookedCount` test used the shared `fixture.class`/default room and pushed its now-permanently-
+   booked session onto the shared `createdSessionIds` cleanup array — exactly the mistake
+   `sessions.test.js`'s own P6 describe block already has a comment warning against. Root-caused by
+   reading that comment (not by trial and error) and fixed the same way that block already does: a
+   dedicated, never-cleaned-up class and room for the one test that needs a real, permanent booking.

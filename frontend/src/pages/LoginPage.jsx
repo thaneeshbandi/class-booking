@@ -1,6 +1,7 @@
 import { useState } from 'react';
 import { Link, Navigate, useLocation, useNavigate } from 'react-router-dom';
 
+import { AuthLayout } from '../components/AuthLayout.jsx';
 import { ErrorBanner } from '../components/States.jsx';
 import { useAuth } from '../context/AuthContext.jsx';
 
@@ -35,14 +36,9 @@ export function LoginPage() {
   }
 
   return (
-    <div className="auth-screen">
-      <form className="auth-card" onSubmit={handleSubmit}>
-        <div className="auth-brand">
-          <span className="auth-brand-mark" aria-hidden="true" />
-          <h1>Class Booking</h1>
-        </div>
-        <p className="auth-subtitle">Sign in to continue.</p>
-
+    <AuthLayout title="Welcome back" subtitle="Sign in to continue.">
+      <span className="badge tone-blue auth-workspace-tag">Staff &amp; instructor workspace</span>
+      <form onSubmit={handleSubmit} noValidate>
         <ErrorBanner error={error} />
 
         <label className="form-label" htmlFor="email">
@@ -80,6 +76,6 @@ export function LoginPage() {
           Don't have an account? <Link to="/signup">Sign up</Link>
         </div>
       </form>
-    </div>
+    </AuthLayout>
   );
 }

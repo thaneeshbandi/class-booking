@@ -6,7 +6,7 @@ const STATUS_TONE = {
   no_show: 'tone-red',
 };
 
-const STATUS_LABEL = {
+export const STATUS_LABEL = {
   booked: 'Booked',
   waitlisted: 'Waitlisted',
   cancelled: 'Cancelled',

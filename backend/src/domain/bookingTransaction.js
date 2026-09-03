@@ -8,7 +8,7 @@ import { env } from '../config/env.js';
  * rows only after, and nothing here starts or commits a transaction itself.
  */
 
-const OCCUPYING_STATUSES = ['booked', 'attended', 'no_show'];
+export const OCCUPYING_STATUSES = ['booked', 'attended', 'no_show'];
 const SETTLED_STATUSES = ['attended', 'no_show'];
 
 /**

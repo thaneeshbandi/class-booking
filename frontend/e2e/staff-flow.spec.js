@@ -64,7 +64,13 @@ test.describe.serial('staff — full application journey', () => {
   });
 
   test('5: dashboard renders every required metric section', async () => {
-    await expect(page.getByRole('heading', { name: 'Dashboard', level: 1 })).toBeVisible();
+    // The h1 is a time-of-day greeting ("Good morning, Ada"), not the
+    // literal word "Dashboard" — the topbar's own page-context label still
+    // reads "Dashboard" separately, checked via the URL instead here.
+    await expect(page).toHaveURL(/\/dashboard$/);
+    await expect(
+      page.getByRole('heading', { level: 1, name: /^Good (morning|afternoon|evening), / }),
+    ).toBeVisible();
     await expect(page.getByText('Sessions today')).toBeVisible();
     await expect(page.getByText('Bookings made today')).toBeVisible();
     await expect(page.getByText('No-shows this week')).toBeVisible();

@@ -2,6 +2,7 @@ import { Router } from 'express';
 import { z } from 'zod';
 
 import {
+  OCCUPYING_STATUSES,
   countOccupiedSeats,
   countSettledBookings,
   promoteWaitlistFIFO,
@@ -65,6 +66,11 @@ function serializeSession(row) {
     endsAt: computeEndsAt(row.starts_at, row.duration_minutes),
     durationMinutes: row.duration_minutes,
     capacity: row.capacity,
+    // Only present on the list endpoint (see `GET /`) — a batch aggregate
+    // computed alongside the page's own listing query, not a per-session
+    // query repeated for every row. Undefined (never serialized) anywhere
+    // else `serializeSession` is called.
+    ...(row.booked_count !== undefined ? { bookedCount: Number(row.booked_count) } : {}),
     createdAt: row.created_at,
     updatedAt: row.updated_at,
   };
@@ -219,7 +225,26 @@ router.get('/', async (req, res, next) => {
       return res.status(400).json(zodErrorResponse(parsedQuery.error));
     }
 
-    let query = db('sessions').select('*').orderBy('starts_at', 'asc');
+    // `booked_count` is a batch aggregate (one query for the whole page),
+    // not `countOccupiedSeats` repeated per row — that would be an N+1
+    // query for every session in the list. The same "booked, attended, or
+    // no_show" definition of occupancy the capacity-change rule already
+    // uses (see `bookingTransaction.js`), so the number shown here can
+    // never quietly drift from what actually blocks a capacity decrease.
+    let query = db('sessions')
+      .select('sessions.*')
+      .leftJoin(
+        db('bookings')
+          .select('session_id')
+          .count({ booked_count: '*' })
+          .whereIn('status', OCCUPYING_STATUSES)
+          .groupBy('session_id')
+          .as('occupancy'),
+        'occupancy.session_id',
+        'sessions.id',
+      )
+      .select(db.raw('COALESCE(occupancy.booked_count, 0) AS booked_count'))
+      .orderBy('starts_at', 'asc');
     if (parsedQuery.data.classId) {
       query = query.where('sessions.class_id', parsedQuery.data.classId);
     }

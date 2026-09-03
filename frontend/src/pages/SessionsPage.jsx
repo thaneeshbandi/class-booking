@@ -5,6 +5,7 @@ import { fetchClasses } from '../api/classes.js';
 import { fetchRooms } from '../api/rooms.js';
 import { createSession, deleteSession, fetchSessions, updateSession } from '../api/sessions.js';
 import { fetchInstructors } from '../api/users.js';
+import { Icon } from '../components/Icon.jsx';
 import { ConfirmDialog, Modal } from '../components/Modal.jsx';
 import { EmptyState, ErrorBanner, LoadingState } from '../components/States.jsx';
 import { useAuth } from '../context/AuthContext.jsx';
@@ -83,101 +84,110 @@ function SessionForm({ initial, classes, rooms, instructors, onCancel, onSaved }
       <ErrorBanner error={error} />
       <ConflictList conflicts={conflicts} />
 
-      <label className="form-label" htmlFor="session-class">
-        Class{isEdit ? ' (cannot be changed after creation)' : ''}
-      </label>
-      <select
-        id="session-class"
-        className="form-input"
-        value={classId}
-        onChange={(event) => setClassId(event.target.value)}
-        required
-        disabled={isEdit}
-      >
-        {classes.map((c) => (
-          <option key={c.id} value={c.id}>
-            {c.title}
-          </option>
-        ))}
-      </select>
+      <div className="form-section">
+        <h3 className="form-section-title">Class &amp; instructor</h3>
+        <label className="form-label" htmlFor="session-class">
+          Class{isEdit ? ' (cannot be changed after creation)' : ''}
+        </label>
+        <select
+          id="session-class"
+          className="form-input"
+          value={classId}
+          onChange={(event) => setClassId(event.target.value)}
+          required
+          disabled={isEdit}
+        >
+          {classes.map((c) => (
+            <option key={c.id} value={c.id}>
+              {c.title}
+            </option>
+          ))}
+        </select>
 
-      <div className="form-row">
-        <div>
-          <label className="form-label" htmlFor="session-instructor">
-            Primary instructor
-          </label>
-          <select
-            id="session-instructor"
-            className="form-input"
-            value={primaryInstructorId}
-            onChange={(event) => setPrimaryInstructorId(event.target.value)}
-            required
-          >
-            {instructors.map((i) => (
-              <option key={i.id} value={i.id}>
-                {i.fullName}
-              </option>
-            ))}
-          </select>
-        </div>
-        <div>
-          <label className="form-label" htmlFor="session-room">
-            Room
-          </label>
-          <select
-            id="session-room"
-            className="form-input"
-            value={roomId}
-            onChange={(event) => setRoomId(event.target.value)}
-            required
-          >
-            {rooms.map((r) => (
-              <option key={r.id} value={r.id}>
-                {r.name}
-              </option>
-            ))}
-          </select>
+        <div className="form-row">
+          <div>
+            <label className="form-label" htmlFor="session-instructor">
+              Primary instructor
+            </label>
+            <select
+              id="session-instructor"
+              className="form-input"
+              value={primaryInstructorId}
+              onChange={(event) => setPrimaryInstructorId(event.target.value)}
+              required
+            >
+              {instructors.map((i) => (
+                <option key={i.id} value={i.id}>
+                  {i.fullName}
+                </option>
+              ))}
+            </select>
+          </div>
+          <div>
+            <label className="form-label" htmlFor="session-room">
+              Room
+            </label>
+            <select
+              id="session-room"
+              className="form-input"
+              value={roomId}
+              onChange={(event) => setRoomId(event.target.value)}
+              required
+            >
+              {rooms.map((r) => (
+                <option key={r.id} value={r.id}>
+                  {r.name}
+                </option>
+              ))}
+            </select>
+          </div>
         </div>
       </div>
 
-      <label className="form-label" htmlFor="session-starts-at">
-        Starts at (your local time)
-      </label>
-      <input
-        id="session-starts-at"
-        type="datetime-local"
-        className="form-input"
-        value={startsAt}
-        onChange={(event) => setStartsAt(event.target.value)}
-        required
-      />
+      <div className="form-section">
+        <h3 className="form-section-title">Date &amp; time</h3>
+        <label className="form-label" htmlFor="session-starts-at">
+          Starts at (your local time)
+        </label>
+        <input
+          id="session-starts-at"
+          type="datetime-local"
+          className="form-input"
+          value={startsAt}
+          onChange={(event) => setStartsAt(event.target.value)}
+          required
+        />
+      </div>
 
-      <div className="form-row">
-        <div>
-          <label className="form-label" htmlFor="session-duration">
-            Duration (minutes, optional — defaults from class)
-          </label>
-          <input
-            id="session-duration"
-            type="number"
-            min="1"
-            className="form-input"
-            value={durationMinutes}
-            onChange={(event) => setDurationMinutes(event.target.value)}
-          />
-        </div>
-        <div>
-          <label className="form-label" htmlFor="session-capacity">
-            Capacity (optional — defaults from class)
-          </label>
-          <input
-            id="session-capacity"
-            type="number"
-            min="1"
-            className="form-input"
-            value={capacity}
-            onChange={(event) => setCapacity(event.target.value)}
-          />
+      <div className="form-section form-section-last">
+        <h3 className="form-section-title">Duration &amp; capacity</h3>
+        <div className="form-row">
+          <div>
+            <label className="form-label" htmlFor="session-duration">
+              Duration (minutes, optional — defaults from class)
+            </label>
+            <input
+              id="session-duration"
+              type="number"
+              min="1"
+              className="form-input"
+              value={durationMinutes}
+              onChange={(event) => setDurationMinutes(event.target.value)}
+            />
+          </div>
+          <div>
+            <label className="form-label" htmlFor="session-capacity">
+              Capacity (optional — defaults from class)
+            </label>
+            <input
+              id="session-capacity"
+              type="number"
+              min="1"
+              className="form-input"
+              value={capacity}
+              onChange={(event) => setCapacity(event.target.value)}
+            />
+          </div>
         </div>
       </div>
 
@@ -272,38 +282,44 @@ export function SessionsPage() {
         {isStaff ? (
           <div className="button-row">
             <Link to="/sessions/recurring" className="btn btn-secondary">
+              <Icon name="calendar" size={15} />
               Generate recurring
             </Link>
             <button type="button" className="btn btn-primary" onClick={() => setModal('create')}>
+              <Icon name="plus" size={16} />
               Create session
             </button>
           </div>
         ) : null}
       </div>
 
-      <label className="form-label" htmlFor="class-filter">
-        Filter by class
-      </label>
-      <select
-        id="class-filter"
-        className="form-input form-input-inline"
-        value={classIdFilter}
-        onChange={(event) => setSearchParams(event.target.value ? { classId: event.target.value } : {})}
-      >
-        <option value="">All classes</option>
-        {classes.map((c) => (
-          <option key={c.id} value={c.id}>
-            {c.title}
-          </option>
-        ))}
-      </select>
+      <div className="filter-bar">
+        <div className="filter-field">
+          <label className="form-label" htmlFor="class-filter">
+            Filter by class
+          </label>
+          <select
+            id="class-filter"
+            className="form-input"
+            value={classIdFilter}
+            onChange={(event) => setSearchParams(event.target.value ? { classId: event.target.value } : {})}
+          >
+            <option value="">All classes</option>
+            {classes.map((c) => (
+              <option key={c.id} value={c.id}>
+                {c.title}
+              </option>
+            ))}
+          </select>
+        </div>
+      </div>
 
       {notice ? <div className="state-block state-success">{notice}</div> : null}
       {loading ? <LoadingState label="Loading sessions…" /> : null}
       {error ? <ErrorBanner error={error} onRetry={load} /> : null}
       {actionError ? <ErrorBanner error={actionError} /> : null}
       {!loading && !error && sessions?.length === 0 ? (
-        <EmptyState label="No sessions to show." />
+        <EmptyState icon="sessions" label="No sessions to show." />
       ) : null}
 
       {!loading && !error && sessions?.length > 0 ? (
@@ -311,56 +327,97 @@ export function SessionsPage() {
         <table className="table">
           <thead>
             <tr>
-              <th>Class</th>
-              <th>Starts</th>
-              <th>Room</th>
-              <th>Instructor</th>
-              <th className="numeric">Capacity</th>
+              <th>Session</th>
+              <th>Room &amp; instructor</th>
+              <th>Occupancy</th>
               <th className="col-actions">Actions</th>
             </tr>
           </thead>
           <tbody>
-            {sessions.map((session) => (
-              <tr key={session.id}>
-                <td>{classById[session.classId]?.title ?? `#${session.classId}`}</td>
-                <td>{new Date(session.startsAt).toLocaleString()}</td>
-                <td>{roomById[session.roomId]?.name ?? `#${session.roomId}`}</td>
-                <td>{instructorById[session.primaryInstructorId]?.fullName ?? `#${session.primaryInstructorId}`}</td>
-                <td className="numeric">{session.capacity}</td>
-                <td className="col-actions">
-                <div className="table-actions">
-                  <Link className="btn btn-secondary btn-small" to={`/sessions/${session.id}`}>
-                    View
-                  </Link>
-                  {isStaff ? (
-                    <>
-                      <button
-                        type="button"
-                        className="btn btn-secondary btn-small"
-                        onClick={() => setModal(session)}
-                      >
-                        Edit
-                      </button>
-                      <button
-                        type="button"
-                        className="btn btn-danger btn-small"
-                        onClick={() => setDeleteTarget(session)}
-                      >
-                        Delete
-                      </button>
-                    </>
-                  ) : null}
-                </div>
-                </td>
-              </tr>
-            ))}
+            {sessions.map((session) => {
+              const capacityFull = session.bookedCount !== undefined && session.bookedCount >= session.capacity;
+              return (
+                <tr key={session.id}>
+                  <td>
+                    <div className="cell-identity">
+                      <span className="cell-identity-primary">
+                        {classById[session.classId]?.title ?? `#${session.classId}`}
+                      </span>
+                      <span className="cell-identity-secondary">
+                        {new Date(session.startsAt).toLocaleString(undefined, {
+                          weekday: 'short',
+                          month: 'short',
+                          day: 'numeric',
+                          hour: 'numeric',
+                          minute: '2-digit',
+                        })}
+                      </span>
+                    </div>
+                  </td>
+                  <td>
+                    <span className="metadata-chip">
+                      <Icon name="sessions" size={13} />
+                      {roomById[session.roomId]?.name ?? `#${session.roomId}`}
+                    </span>
+                    <span className="metadata-chip">
+                      <Icon name="users" size={13} />
+                      {instructorById[session.primaryInstructorId]?.fullName ?? `#${session.primaryInstructorId}`}
+                    </span>
+                  </td>
+                  <td>
+                    {session.bookedCount !== undefined ? (
+                      <span className={`badge ${capacityFull ? 'tone-amber' : 'tone-gray'}`}>
+                        {session.bookedCount} / {session.capacity}
+                      </span>
+                    ) : (
+                      <span className="badge tone-gray">— / {session.capacity}</span>
+                    )}
+                  </td>
+                  <td className="col-actions">
+                  <div className="table-actions">
+                    <Link className="btn btn-secondary btn-small" to={`/sessions/${session.id}`}>
+                      View
+                    </Link>
+                    {isStaff ? (
+                      <>
+                        <button
+                          type="button"
+                          className="btn btn-secondary btn-small"
+                          onClick={() => setModal(session)}
+                        >
+                          <Icon name="edit" size={13} />
+                          Edit
+                        </button>
+                        <button
+                          type="button"
+                          className="btn btn-ghost-danger btn-small"
+                          onClick={() => setDeleteTarget(session)}
+                        >
+                          <Icon name="trash" size={13} />
+                          Delete
+                        </button>
+                      </>
+                    ) : null}
+                  </div>
+                  </td>
+                </tr>
+              );
+            })}
           </tbody>
         </table>
         </div>
       ) : null}
 
       {modal ? (
-        <Modal title={modal === 'create' ? 'Create session' : 'Edit session'} onClose={() => setModal(null)}>
+        <Modal
+          title={modal === 'create' ? 'Create session' : 'Edit session'}
+          subtitle={
+            modal === 'create'
+              ? 'Schedule a new one-off session.'
+              : `Editing session #${modal.id}.`
+          }
+          onClose={() => setModal(null)}
+        >
           <SessionForm
             initial={modal === 'create' ? null : modal}
             classes={classes}

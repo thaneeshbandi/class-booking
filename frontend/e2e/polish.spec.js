@@ -184,7 +184,7 @@ test.describe('recurring session generation — client-side UX', () => {
       if (!shouldBeChecked && (await checkbox.isChecked())) await checkbox.uncheck();
     }
 
-    await expect(page.getByText('1 session will be attempted')).toBeVisible();
+    await expect(page.getByText('1 session will be generated')).toBeVisible();
     const submit = page.getByRole('button', { name: 'Generate sessions' });
     await expect(submit).toBeEnabled();
     await submit.click();
@@ -236,7 +236,7 @@ test.describe('recurring session generation — client-side UX', () => {
       if (!shouldBeChecked && (await checkbox.isChecked())) await checkbox.uncheck();
     }
 
-    await expect(page.getByText('4 sessions will be attempted')).toBeVisible();
+    await expect(page.getByText('4 sessions will be generated')).toBeVisible();
     await page.getByRole('button', { name: 'Generate sessions' }).click();
     await expect(page.getByRole('heading', { name: 'Created (4)' })).toBeVisible();
     await expect(page.getByRole('heading', { name: 'Skipped (0)' })).toBeVisible();
