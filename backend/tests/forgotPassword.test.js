@@ -470,7 +470,7 @@ async function waitForHealth(port, timeoutMs = 10_000) {
   throw new Error(`Production child process never became healthy on port ${port}: ${lastError}`);
 }
 
-describe('production: the dev OTP route does not exist', () => {
+describe('production behavior, verified against a real separate process', () => {
   // `isProduction` is resolved once at module import time (src/config/env.js),
   // so there is no way to flip it inside *this* already-running test process
   // — the only genuine way to prove the dev route is unreachable in
@@ -505,6 +505,72 @@ describe('production: the dev OTP route does not exist', () => {
       assert.equal(devRoute.status, 404, 'the dev OTP route must not exist at all in production');
       const body = await devRoute.json();
       assert.equal(body.error, 'Not found', 'the app\'s own ordinary 404 — not a route-specific "forbidden"');
+    } finally {
+      child.kill();
+    }
+  });
+
+  it('production with no email provider configured fails safely: the request still returns the generic response, and nothing OTP-shaped is ever logged', async () => {
+    const port = 45392;
+    // Deliberately no EMAIL_PROVIDER (and therefore no RESEND_API_KEY/
+    // SMTP_*/EMAIL_WEBHOOK_* either) — the one scenario `selectProvider`'s
+    // own production guard exists for. An empty string would fail Zod's own
+    // enum validation at startup (`.optional()` allows a missing key, not an
+    // empty one) before the app even got this far, so the key is actually
+    // deleted, not just blanked.
+    const childEnv = { ...process.env, NODE_ENV: 'production', PORT: String(port) };
+    delete childEnv.EMAIL_PROVIDER;
+    const child = spawn(process.execPath, [path.join(backendRoot, 'src', 'server.js')], {
+      env: childEnv,
+      stdio: ['ignore', 'pipe', 'pipe'],
+    });
+    let output = '';
+    child.stdout.on('data', (chunk) => {
+      output += chunk;
+    });
+    child.stderr.on('data', (chunk) => {
+      output += chunk;
+    });
+
+    try {
+      await waitForHealth(port).catch((error) => {
+        throw new Error(`${error.message}\nchild output:\n${output}`);
+      });
+
+      const email = `prod-no-provider-${Date.now()}@example.test`;
+      const password = 'a-real-password-123';
+      const signup = await fetch(`http://127.0.0.1:${port}/api/auth/signup`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ fullName: 'Prod No Provider', email, password }),
+      });
+      assert.equal(signup.status, 201);
+
+      const request = await fetch(`http://127.0.0.1:${port}/api/auth/forgot-password/request`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ email }),
+      });
+      assert.equal(request.status, 200, 'the request itself must still succeed with the ordinary generic response');
+      const requestBody = await request.json();
+      assert.deepEqual(
+        Object.keys(requestBody).sort(),
+        ['cooldownSeconds', 'expiresInMinutes', 'message'],
+        'never a hint that the email send actually failed',
+      );
+
+      // The send is fire-and-forget (see routes/auth.js), so the failure is
+      // logged asynchronously, slightly after the response above already
+      // returned — poll briefly for it rather than assuming it has already
+      // landed the instant the request resolves.
+      const deadline = Date.now() + 5_000;
+      while (!output.includes('[forgot-password] failed to send OTP email') && Date.now() < deadline) {
+        await delay(50);
+      }
+      assert.match(output, /\[forgot-password\] failed to send OTP email/, `expected a safe, logged failure; got:\n${output}`);
+      assert.match(output, /EMAIL_PROVIDER must be set to a real provider/);
+      assert.doesNotMatch(output, /\b\d{6}\b/, 'no 6-digit OTP-shaped value may ever appear in the logs');
+      assert.doesNotMatch(output, new RegExp(password), "the signup password must never appear in the logs either");
     } finally {
       child.kill();
     }

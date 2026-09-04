@@ -8,7 +8,22 @@ import { env, isProduction } from '../config/env.js';
  * had one before this milestone (there was no feature that needed to send
  * email). Every caller goes through `sendOtpEmail` below; which provider
  * actually delivers the message is chosen once, from environment variables,
- * never hardcoded.
+ * never hardcoded. Four providers: `consoleProvider` (dev/test only),
+ * `webhookProvider` and `smtpProvider` (both pre-existing), and
+ * `resendProvider` — the recommended real provider on a host whose outbound
+ * network reaches HTTPS but not SMTP ports (Render, at minimum — see that
+ * provider's own comment and `docs/decisions.md`).
+ *
+ * `sentEmails` is an in-memory, process-local record of what the dev/console
+ * provider "sent". It exists for exactly one reason: automated tests must be
+ * able to retrieve a generated OTP without making a real email call (backend
+ * `node --test` runs in the same process as the app under test — see
+ * `tests/helpers/httpClient.js` — and can import this array directly;
+ * Playwright runs as a separate process and instead uses the dev-only
+ * `GET /api/auth/forgot-password/dev/last-otp` route in `routes/auth.js`,
+ * which is only ever registered when `!isProduction`). It is bounded and
+ * reset per process; nothing about it is reachable over HTTP except that one
+ * explicitly non-production route.
  *
  * `sentEmails` is an in-memory, process-local record of what the dev/console
  * provider "sent". It exists for exactly one reason: automated tests must be
@@ -37,8 +52,15 @@ function recordSentEmail(entry) {
  * valid, and a standard "ignore if this wasn't you" line — never the
  * account's email, name, role, or (obviously) anything about the password
  * itself.
+ *
+ * Exported (alongside `resendProvider` and `selectProvider` below) purely
+ * for direct unit testing (`tests/emailProvider.test.js`) — provider
+ * selection is not otherwise testable in-process, since `getProvider`'s own
+ * cache and `isProduction` are both fixed at module-import time for the
+ * whole test run; calling these functions directly bypasses that cache
+ * rather than fighting it.
  */
-function buildOtpEmailContent(otp, ttlMinutes) {
+export function buildOtpEmailContent(otp, ttlMinutes) {
   const subject = 'Your Class Booking password reset code';
   const text = [
     'Class Booking — password reset',
@@ -106,6 +128,15 @@ async function webhookProvider({ to, subject, text, html }) {
  * a real company mail server, etc.), with no separate relay server of its
  * own to build and host first, unlike `webhookProvider`. The transport is
  * built once, lazily, from environment variables only.
+ *
+ * Not the recommended choice on every host: some managed platforms (Render,
+ * among others) don't reliably allow outbound connections on SMTP ports —
+ * this was discovered directly on this project's own deployment (a real
+ * `ETIMEDOUT` connecting to `smtp.gmail.com:587` from Render, with the exact
+ * same host's outbound HTTPS traffic working the whole time), which is what
+ * `resendProvider` below exists to route around. Left in place — genuinely
+ * useful on any host that *can* reach an SMTP port — rather than removed
+ * just because it doesn't fit this one deployment; see `docs/decisions.md`.
  */
 let smtpTransport;
 function getSmtpTransport() {
@@ -133,7 +164,40 @@ async function smtpProvider({ to, subject, text, html }) {
   await getSmtpTransport().sendMail({ from: env.SMTP_FROM, to, subject, text, html });
 }
 
-function selectProvider() {
+/**
+ * Resend's transactional-email HTTPS API — a plain `fetch` POST, the same
+ * "no vendor SDK, just the wire protocol" shape `webhookProvider` already
+ * uses, not a new dependency. This is the recommended provider for a host
+ * whose outbound network reaches HTTPS but not arbitrary SMTP ports (see
+ * `getSmtpTransport`'s own comment, and `docs/decisions.md`).
+ *
+ * The thrown error on failure is deliberately just a bare status code —
+ * never the response body (which could echo back the request, including the
+ * recipient) and never the request itself (which would put the OTP and the
+ * API key one string-interpolation mistake away from a log line). The only
+ * thing any caller of `sendOtpEmail` ever does with a rejected promise is
+ * log the `Error` object (see `routes/auth.js`), so what this throws *is*
+ * what ends up in the logs.
+ */
+export async function resendProvider({ to, subject, text, html }) {
+  if (!env.RESEND_API_KEY || !env.RESEND_FROM) {
+    throw new Error('EMAIL_PROVIDER=resend requires RESEND_API_KEY and RESEND_FROM to be set.');
+  }
+  const res = await fetch('https://api.resend.com/emails', {
+    method: 'POST',
+    headers: {
+      'Content-Type': 'application/json',
+      Authorization: `Bearer ${env.RESEND_API_KEY}`,
+    },
+    body: JSON.stringify({ from: env.RESEND_FROM, to, subject, text, html }),
+  });
+  if (!res.ok) {
+    throw new Error(`Resend responded with status ${res.status}.`);
+  }
+}
+
+export function selectProvider() {
+  if (env.EMAIL_PROVIDER === 'resend') return resendProvider;
   if (env.EMAIL_PROVIDER === 'smtp') return smtpProvider;
   if (env.EMAIL_PROVIDER === 'webhook') return webhookProvider;
   if (isProduction) {
@@ -142,7 +206,7 @@ function selectProvider() {
     // logging for — that fallback is exactly the "OTP visible somewhere
     // production can see it" outcome this must never allow.
     throw new Error(
-      'EMAIL_PROVIDER must be set to a real provider ("smtp" or "webhook") in production.',
+      'EMAIL_PROVIDER must be set to a real provider ("resend", "smtp", or "webhook") in production.',
     );
   }
   return consoleProvider;

@@ -1391,3 +1391,57 @@ pre-existing implementation:
    connection to port 587 timed out). The claim was corrected to state plainly that the SMTP provider's
    code was reviewed but never actually executed against a real mail server, per this milestone's own
    explicit instruction not to claim a real email was delivered unless it actually was.
+
+## SMTP failed on Render; switched to an HTTPS email provider (Resend)
+
+### Prompt
+
+A direct bug report from the actual deployed app: the forgot-password flow reaches the backend correctly
+(Vercel → Render confirmed working, the browser request returns 200), but Render's own logs show
+`[forgot-password] failed to send OTP email: Error: Connection timeout`, `ETIMEDOUT`, port 587 — the
+previous milestone's SMTP provider failing specifically on the Render → smtp.gmail.com leg. Explicit
+instruction not to keep relying on direct SMTP given Render's network won't reliably reach it, and to add a
+real HTTPS transactional-email provider instead, specifically Resend — with a long list of constraints:
+inspect the existing abstraction first, never expose the API key to the frontend or commit it, keep the
+existing dev/test provider and the existing OTP/reset-token/frontend logic entirely unchanged, keep SMTP/
+webhook only if doing so stays clean, preserve the not-awaiting-the-send design if still correct, a specific
+test list (provider selection, correct HTTPS payload, missing config, provider failure, no OTP/key
+leakage), mocked-provider-only tests (no real external service in the permanent suite), and a documentation/
+verification/commit checklist.
+
+### What was produced
+
+Added `resendProvider` to the existing `email/emailService.js` abstraction — a plain `fetch` POST to
+Resend's HTTPS API, no new SDK dependency, matching the existing `webhookProvider`'s own "just the wire
+protocol" shape. `RESEND_API_KEY`/`RESEND_FROM` follow the file's own established per-provider naming
+(matching `SMTP_HOST`/`SMTP_FROM`) rather than the generic `EMAIL_FROM` the request used as an example name,
+per its own explicit permission to deviate from example names for a better existing convention. The
+existing `smtp` and `webhook` providers, `consoleProvider`, `buildOtpEmailContent`, and every OTP/reset-
+token/frontend file were left completely untouched — this was scoped entirely to
+`email/emailService.js` and `config/env.js`. The not-awaiting-the-send design from Decision 53 was kept
+exactly as-is; `resendProvider`'s own errors are deliberately just a bare status code, matching
+`webhookProvider`'s pattern, so the existing `.catch((error) => console.error(...))` call site needed no
+change to stay safe. Exported `selectProvider`/`resendProvider`/`buildOtpEmailContent` (previously internal)
+specifically to make provider selection and request-building testable at all — `getProvider()`'s own cache
+and `isProduction` are both fixed by the time any new test runs, in a suite where dozens of earlier tests
+already called `sendOtpEmail` — and wrote a new file, `tests/emailProvider.test.js` (11 tests, mocked
+`fetch`, no real network), plus one more test in the existing production-child-process describe block
+proving a fully unconfigured production instance still returns the generic response and never logs an
+OTP-shaped value.
+
+### What was correct
+
+The existing abstraction's shape (a `selectProvider()` dispatch function, each provider a small async
+function reading only its own env vars, `sendOtpEmail` as the one call site) needed no restructuring to add
+a fourth provider — exactly the "add one function, one branch" extensibility `docs/decisions.md`'s own
+Decision 39 originally designed it for.
+
+### What was wrong, and what was corrected
+
+Nothing in the new provider code itself; one process-level discovery while writing its tests, not a bug:
+the first attempt to test the new provider's *selection* logic by calling `sendOtpEmail` directly (as the
+existing tests do) silently always exercised the console/dev provider regardless of what `EMAIL_PROVIDER`
+was set to — because `getProvider()`'s cache had already been warmed by every earlier test in the suite
+before this new test ever ran. Recognized before trusting the test as meaningful (it would have passed
+without actually proving anything), and corrected by testing `selectProvider()` directly instead, which is
+not memoized and re-evaluates fresh every call.

@@ -1096,6 +1096,45 @@ session plus 6 new), run three times across this session, all clean. A fresh `np
 migrations — no new migration needed) followed by the backend suite once more (489/488/1, identical) and
 the full Playwright suite once more against the freshly reset database (100/100, clean).
 
+## Session 23 — SMTP failed on Render; added an HTTPS email provider (Resend)
+
+Session 22's SMTP provider was deployed and failed exactly as its own comment already predicted might
+happen: Render's logs showed `[forgot-password] failed to send OTP email: Error: Connection timeout` /
+`ETIMEDOUT` connecting to `smtp.gmail.com:587`, while the browser's own request to `/forgot-password/
+request` still returned 200 and every other Render↔Vercel/Render↔Supabase HTTPS traffic kept working the
+whole time — a genuine network restriction on Render's outbound connections (SMTP ports specifically), not
+a credentials or code mistake.
+
+Added a fourth provider, `resendProvider` (`EMAIL_PROVIDER=resend`), calling Resend's transactional-email
+HTTPS API directly with a plain `fetch` POST — the same "no vendor SDK, just the wire protocol" shape
+`webhookProvider` already used, so no new dependency was needed for this one. `RESEND_API_KEY`/
+`RESEND_FROM` follow this file's own established per-provider naming convention rather than a generic
+shared name. `selectProvider`/`resendProvider`/`buildOtpEmailContent` were exported (previously internal)
+specifically so provider selection and request-building could be unit-tested directly, sidestepping
+`getProvider()`'s own module-level cache — which, by the time any new test file runs, has already been
+warmed to the console/dev provider by dozens of earlier tests calling `sendOtpEmail`, and `isProduction`
+being fixed at import time means the production-guard branch still needs the same real-child-process
+technique Session 22 introduced. The existing `smtp` and `webhook` providers were left in place, unchanged
+— genuinely useful on a host whose network actually allows them, and removing working code just because
+one specific platform can't use it would be exactly the kind of destructive cleanup this project avoids
+elsewhere. See `docs/decisions.md`, Decision 55.
+
+No change was made to OTP generation, hashing, expiry, anti-enumeration, the reset token, or any frontend
+code — this was entirely a `backend/src/email/emailService.js` + `backend/src/config/env.js` change, plus
+one new backend test file and one new test in the existing production-child-process describe block.
+
+### Verification
+
+Backend `npm test` — 501 tests, 500 passing, 1 skipped (unchanged shape; 12 new tests: 11 in the new
+`tests/emailProvider.test.js`, 1 new production-child-process test in `tests/forgotPassword.test.js`) — and
+`npm run lint`, clean. One unrelated, untouched test (`recurringSessions.test.js`'s DST-transition test)
+failed once during a full-suite run and passed cleanly in isolation immediately after — the same transient-
+under-load pattern this project has documented before (Sessions 17 and 21) — followed by two more full
+clean runs. Frontend `npm run lint` and `npm run build`, clean (no frontend file changed this session; dev/
+test still uses the unchanged console provider, so the full Playwright suite, 100/100, needed no new
+coverage and stayed clean). A fresh `npm run db:reset` (still 14 migrations — no schema change) followed by
+the backend suite once more, clean.
+
 ## What was cut
 
 Nothing was cut from goal 4's own scope — all eight specified phases, including the full required

@@ -962,3 +962,33 @@ backend/src/domain/sessionConflicts.js`), not invented for this file.
   legitimate user who is clearly stuck gets pointed at "request a new code") without ever asking the server
   to confirm anything it wouldn't already say — it counts the browser's own failed submissions, nothing the
   server reports back.
+
+## Decision 55
+
+- **Chose:** A fourth email provider, `resend` (`EMAIL_PROVIDER=resend`), calling Resend's transactional-
+  email HTTPS API directly with a plain `fetch` POST — no vendor SDK, matching `webhookProvider`'s own
+  "just the wire protocol" shape. This is now the *recommended* provider for this project's actual
+  deployment (Render), documented as such in `backend/.env.example` and `docs/architecture.md`. The
+  existing `smtp` and `webhook` providers are unchanged and still selectable — kept because doing so cost
+  one more `if` branch in `selectProvider`, not because either is still the recommended choice here.
+- **Rejected:** Removing the `smtp` provider now that it's known not to work on this project's own
+  deployment; adding the Resend Node SDK as a dependency instead of a plain `fetch` call.
+- **Why:** Decision 52's own SMTP provider was deployed to Render and failed exactly as that decision's
+  own comment already warned it might: a real `ETIMEDOUT` connecting to `smtp.gmail.com:587`, while the
+  same host's outbound HTTPS traffic (Vercel → Render, Render → Supabase, Render → Ethereal's HTTPS API
+  during this project's own earlier verification) worked the entire time — a known restriction on several
+  managed platforms, not a configuration mistake. Rather than tuning SMTP further (there is nothing to
+  tune; the platform's network does not permit the connection at all), the fix is a provider that only
+  ever needs outbound HTTPS, which every part of this deployment already demonstrably has. Removing `smtp`
+  was rejected because the abstraction's whole point is to be swappable per deployment target — a
+  different host with different network rules could still use it correctly, and deleting working, already-
+  tested code to tidy up after one specific platform's limitation would be exactly the kind of destructive
+  cleanup this project avoids elsewhere (see the standing instruction against removing infrastructure that
+  still works). A plain `fetch` call was preferred over Resend's own SDK for the same reason `nodemailer`
+  was justified in Decision 52 and a vendor SDK was not: Resend's HTTPS API is a simple, well-documented
+  POST endpoint, not a protocol worth a dependency to implement correctly — unlike raw SMTP, which
+  genuinely is.
+- **Naming:** `RESEND_API_KEY`/`RESEND_FROM`, not the generic `EMAIL_FROM` the request that prompted this
+  decision suggested as an example — matching this file's own established per-provider convention
+  (`SMTP_HOST`/`SMTP_FROM`, `EMAIL_WEBHOOK_URL`/`EMAIL_WEBHOOK_TOKEN`) rather than one name shared across
+  providers, since a deployment could plausibly configure a different sender address per provider.

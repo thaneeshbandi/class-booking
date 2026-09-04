@@ -507,17 +507,21 @@ three shapes the milestone's brief asked for, used by the new member-portal/prof
   would mean adding exactly the kind of server-side session state that token's own design deliberately
   avoids; the accepted tradeoff is documented, not silent — see Decision 36.
 - **A specific vendor SDK for email (SendGrid, SES, Postmark, ...) — largely superseded.** `email/
-  emailService.js` gained a real, direct SMTP provider (`EMAIL_PROVIDER=smtp`, via `nodemailer`) alongside
-  the existing generic webhook provider — see `docs/decisions.md`, Decision 52. It only needs credentials
-  from any ordinary SMTP relay (a Gmail app password, Mailtrap, Resend/Brevo's SMTP endpoint, a company
-  mail server, ...), not a vendor SDK or a separate relay server. What remains an honest, stated gap: this
-  development sandbox has no outbound network access to a raw SMTP port (verified directly — an attempt to
-  send through a real, disposable Ethereal test account timed out on the TCP connection itself, HTTPS-only
-  egress), so the SMTP provider's actual `sendMail` call has been reviewed and reasoned through but never
-  executed against a real mail server. No SMTP or webhook credentials are configured for this project's own
-  deployed instance either, so no reset email has actually been delivered from the live app. Production is
-  still configured to *refuse to start sending email at all* if neither provider is configured, rather than
-  silently falling back to logging.
+  emailService.js` now has four providers: the dev/console one, `smtp` (`nodemailer`), `webhook` (a plain
+  POST), and `resend` (Resend's transactional-email HTTPS API, also a plain `fetch` POST — no vendor SDK
+  for this one either). None needs a vendor SDK; see `docs/decisions.md`, Decisions 39, 52, and 55.
+  **The SMTP provider was actually deployed to Render and failed**: Render's own logs showed a real
+  `ETIMEDOUT` connecting to `smtp.gmail.com:587`, while the same host's outbound HTTPS traffic (Vercel →
+  Render, Render → Supabase) kept working throughout — a network restriction on Render's outbound
+  connections specifically, not a code or credentials mistake. `resend` is the provider that actually works
+  from this deployment, since it only needs outbound HTTPS. **Honest, current status:** `resendProvider`'s
+  request-building and error-handling are covered by real, in-process unit tests against a mocked `fetch`
+  (`tests/emailProvider.test.js`) — but no real email has been sent through it either, from this development
+  sandbox (no outbound access to a raw SMTP port at all, confirmed directly; HTTPS to Resend itself was
+  never attempted with real credentials, since none exist here) or from the deployed instance, since
+  `RESEND_API_KEY`/`RESEND_FROM` are not yet set on Render — that remains an operator step for the person
+  deploying this, documented in `SUBMISSION.md`. Production is still configured to *refuse to start sending
+  email at all* if no provider is configured, rather than silently falling back to logging.
 - **Periodic cleanup of expired `password_reset_otps` rows.** See `docs/schema.md`'s "what would break
   first at 100x" — correctness never depends on old rows being pruned (every read filters on
   `expires_at`/`consumed_at`/`attempts`), so this is a real but non-urgent maintenance task, not a

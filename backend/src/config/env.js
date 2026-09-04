@@ -95,16 +95,29 @@ export const envSchema = z.object({
   // Selects the email provider `src/email/emailService.js` sends
   // password-reset OTPs through. Unset in development/test resolves to a
   // console/dev provider that never touches a real inbox; production must
-  // set this to a real provider ("smtp" or "webhook" — see
+  // set this to a real provider ("resend", "smtp", or "webhook" — see
   // `emailService.js`) or the app refuses to start sending email at all.
-  EMAIL_PROVIDER: z.enum(['webhook', 'smtp']).optional(),
+  EMAIL_PROVIDER: z.enum(['resend', 'webhook', 'smtp']).optional(),
   EMAIL_WEBHOOK_URL: z.string().url().optional(),
   EMAIL_WEBHOOK_TOKEN: z.string().min(1).optional(),
 
+  // Required only when EMAIL_PROVIDER=resend: Resend's transactional-email
+  // HTTPS API. The recommended provider on a host whose outbound network
+  // reaches HTTPS but not arbitrary SMTP ports — discovered to be exactly
+  // Render's situation for this project (see `docs/decisions.md`).
+  // RESEND_FROM follows the same per-provider naming this file already uses
+  // (SMTP_FROM, EMAIL_WEBHOOK_URL/TOKEN) rather than one name shared across
+  // providers, since a deployment could plausibly send from a different
+  // address per provider.
+  RESEND_API_KEY: z.string().min(1).optional(),
+  RESEND_FROM: z.string().min(1).optional(),
+
   // Required only when EMAIL_PROVIDER=smtp: a standard SMTP relay (Gmail
   // with an app password, Mailtrap, Resend/Brevo's SMTP endpoint, etc.) —
-  // this is the path that lets a real deployment send real email without
-  // first standing up a separate webhook relay server.
+  // lets a deployment send real email without first standing up a separate
+  // webhook relay server, on a host whose network actually allows it (some
+  // managed platforms, including Render, do not reliably permit outbound
+  // SMTP-port connections — use EMAIL_PROVIDER=resend there instead).
   SMTP_HOST: z.string().min(1).optional(),
   SMTP_PORT: z.coerce.number().int().positive().max(65535).optional(),
   SMTP_SECURE: booleanish.optional(),
