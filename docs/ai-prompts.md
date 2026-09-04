@@ -1174,3 +1174,59 @@ violation) for exactly this case, because the `_email_normalised` `CHECK` constr
 `UNIQUE` constraint on a value that was never pre-normalized by the application layer. The new test was
 corrected to expect `23514` to match, before it was ever run — a wrong assumption caught by checking
 precedent rather than by a failing test.
+
+## Staff can create staff/instructor accounts (Team page)
+
+### Prompt
+
+Not a bug report — a deployment question, asked across a short back-and-forth. First: with all the demo
+seed data used for testing, what happens once the app is actually deployed, and how would anyone access a
+staff or instructor account at all? Then, after a first explanation of the options (edit the seed into real
+bootstrap data, a one-off CLI script, a real in-app "staff creates staff/instructor" feature) wasn't clear
+enough, asked for the tradeoffs in more detail. Finally: "can we do something like the one who is a staff
+can add any other staff or instructor... just tell me if its possible or not and if yes, what will be
+done," followed by an explicit hand-off of the implementation decision: "i am giving you the power, think
+how a real web application in the deployment works and implement it and tell me what you are doing."
+
+### What was produced
+
+Chose the in-app feature (the third option discussed), reusing this codebase's own established patterns
+rather than inventing new ones: `POST /api/users` (staff-only, restricted to `role: 'staff'|'instructor'`
+by its own schema — never `'member'`) follows the exact create/hash-password/catch-`23505`-into-409 shape
+`routes/members.js` already uses for `members.email`; the new `TeamPage.jsx` follows `MembersPage.jsx`'s
+own table-plus-modal shape exactly. The new account's password is set directly by the staff member creating
+it, communicated out of band, with a form hint that the new user can change it from their own profile page
+afterward — chosen over an email-invite flow specifically because this app has no real transactional email
+provider wired up (only the dev-only OTP stand-in), so an invite flow would need infrastructure that does
+not exist yet; and over a forced-password-change flag because the existing change-password flow already
+covers the same need with no new mechanism. No migration was needed (`users.email` was already unique).
+Documented as an explicit, out-of-spec addition in `docs/decisions.md`, Decision 49 — not one of the
+README's ten mandatory goals or its own stretch list, built only because it was asked for directly.
+
+### What was correct
+
+The reused-patterns approach worked with no rework: the `23505` → 409 handling, the modal form shape, and
+the staff-only route gating all matched their `routes/members.js`/`MembersPage.jsx` counterparts exactly on
+the first pass.
+
+### What was wrong, and what was corrected
+
+Two real issues, both surfaced by this feature's own first Playwright test run, not shipped silently:
+
+1. **A genuine, pre-existing application bug**, not something this session introduced but something its own
+   new caller was the first to expose: `GET /api/users`'s unfiltered branch had never excluded
+   `role = 'member'` — every caller before the new Team page had always passed an explicit `role` filter, so
+   nothing had ever asked it for "everyone" and gotten every self-registered member account back along with
+   the intended staff/instructor roster. Found by looking at a failing test's screenshot (attached for a
+   different, unrelated assertion) and noticing the staff Team page's table was full of member rows. Fixed
+   at the route itself, with a new regression test (`roomsAndUsers.test.js`) that would have caught this
+   directly.
+2. **A test-writing mistake**: the first version of the "an instructor cannot reach the Team page" test used
+   fixture names starting with "Team Test Instructor" and asserted zero `Team`-named links on the
+   instructor's own nav. It failed — but for the wrong reason: Playwright's default role-name matching is
+   substring and case-insensitive, so the sidebar identity link (which renders the logged-in user's own full
+   name, itself containing "Team") matched the query, producing a false "the Team link leaked into the
+   instructor's nav" failure. The failure's own screenshot showed the instructor's actual nav was correct
+   (no Team link at all), which is what revealed the real cause. Corrected by scoping the locator to
+   `nav.sidebar-nav` (matching `account-security.spec.js`'s own established pattern for this exact kind of
+   ambiguity) and renaming the test fixtures to avoid the word "Team" entirely.

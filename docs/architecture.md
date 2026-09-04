@@ -6,8 +6,11 @@ product: accounts and roles, classes, sessions, the booking lifecycle with immut
 co-instructors, server-side booking search/filter/sort/pagination, recurring session generation with
 attendance CSV export, the staff-only dashboard, expiring membership alerts, account/member linking, a
 member portal (browse/book/cancel/view own bookings), a profile page for every role, forgot-password by
-email OTP, and a reusable error-presentation system — all served by a React/Vite browser-side app. Only
-the optional stretch ideas beyond that remain — see "What was deliberately not built" below.
+email OTP, a reusable error-presentation system, and — out of spec, added on an explicit deployment-
+readiness request — a "Team" page letting staff create other staff/instructor accounts in-app, rather than
+account provisioning being a database-only operation (see `docs/decisions.md`, Decision 49). All served by
+a React/Vite browser-side app. Only the optional stretch ideas beyond that remain — see "What was
+deliberately not built" below.
 
 ## Moving pieces
 

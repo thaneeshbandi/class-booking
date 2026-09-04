@@ -19,6 +19,7 @@ import { RecurringSessionsPage } from './pages/RecurringSessionsPage.jsx';
 import { SessionDetailPage } from './pages/SessionDetailPage.jsx';
 import { SessionsPage } from './pages/SessionsPage.jsx';
 import { SignupPage } from './pages/SignupPage.jsx';
+import { TeamPage } from './pages/TeamPage.jsx';
 
 /** Staff land on the studio-wide dashboard; instructors have no access to
  * it (goal 8 is staff-only), so they land on their own session list. A
@@ -47,6 +48,7 @@ function AppRoutes() {
             <Route path="alerts" element={<AlertsPage />} />
             <Route path="classes" element={<ClassesPage />} />
             <Route path="sessions/recurring" element={<RecurringSessionsPage />} />
+            <Route path="team" element={<TeamPage />} />
           </Route>
 
           <Route path="sessions" element={<SessionsPage />} />

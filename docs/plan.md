@@ -911,6 +911,69 @@ navigation tests, one per role plus a link-semantics check), run twice consecuti
 fresh `npm run db:reset` (14 migrations, including the new one) followed by the backend suite once more
 (474/473/1, identical).
 
+## Session 19 — staff can create staff/instructor accounts (Team page)
+
+A deployment question, not a bug report: with signup only ever able to create `member` accounts and no
+endpoint anywhere to create a `staff` or `instructor` one, a fresh production deploy would have no in-app
+way to get a second staff/instructor account into the system after the first. Talked through the tradeoffs
+(edit the seed into real bootstrap data; a one-off CLI script; a real in-app "staff creates staff/
+instructor" feature) before writing anything, then built the third at the user's explicit request — see
+`docs/decisions.md`, Decision 49, for the full reasoning, including why this is deliberately out-of-spec
+relative to the README's ten mandatory goals.
+
+`POST /api/users` (staff-only) creates a `staff` or `instructor` account — never `member`, restricted by
+the request schema's own enum, not just staff-only self-discipline — hashing the password with the same
+Argon2 setup signup already uses, and catching `23505` into the same clean `409` shape `routes/members.js`
+already established for `members.email`. No migration was needed: `users.email` was already unique. The
+password is set directly by the staff member creating the account, communicated out of band; the new user
+changes it afterward from the profile page every role already has — no invite-email or forced-password-
+change infrastructure was built, since neither exists in this app yet and neither was necessary to solve
+the actual problem. A new "Team" page (`TeamPage.jsx`, modeled directly on `MembersPage.jsx`'s own table-
+plus-modal shape) lists the studio's staff/instructor roster and lets staff add to it; added to
+`STAFF_LINKS` only, matching every other staff-only page's own gating.
+
+One real bug, caught by this session's own first Playwright run rather than shipped: `GET /api/users`
+(pre-existing, added in an earlier milestone) had never excluded `role = 'member'` from its unfiltered
+branch — every prior caller happened to always pass an explicit `role` filter, so the gap was latent until
+the new Team page's own unfiltered listing call became the first caller that didn't, and immediately pulled
+every self-registered member account into what was meant to be a small staff/instructor roster. Fixed at
+the route itself (always excludes `member`, filtered or not), with a new regression test asserting a known
+member account never appears in the response.
+
+### What was correct
+
+The core shape — reuse `routes/members.js`'s create/hash/catch-`23505` pattern, reuse `MembersPage.jsx`'s
+table-plus-modal UI pattern, no schema change needed — held up with no rework.
+
+### What was wrong, and what was corrected
+
+The `GET /api/users` member-leak bug above: not something this session introduced (the route's code was
+already there), but something this session's own new caller was the first to actually exercise, caught by
+a genuinely useful Playwright failure (an unrelated "an instructor cannot reach the Team page" assertion
+initially failed for a different, more interesting reason — see below — but the failure screenshot also
+made the leaked member rows visible on the staff page, which is what prompted looking at the endpoint
+directly rather than just the failing assertion).
+
+A second, separate mistake, in the test itself rather than the app: the first version of the "instructor
+cannot reach the Team page" Playwright test used fixture names starting with "Team Test Instructor" and
+asserted `getByRole('link', { name: 'Team' })` has zero matches on the instructor's own page. Playwright's
+role-name matching is substring and case-insensitive by default, so the sidebar identity link — which
+renders the logged-in user's own full name, and this fixture's full name itself contained "Team" — matched
+the query, producing a false failure that looked like a real navigation leak. The screenshot in the failure
+report showed the instructor's nav correctly had no "Team" link at all, which is what revealed the true
+cause. Fixed two ways: scoped the nav-link locator to `nav.sidebar-nav` (the pattern `account-security.spec.js`
+already uses for exactly this kind of ambiguity) and renamed the fixtures to avoid the word "Team" entirely.
+
+### Verification
+
+Backend `npm test` — 484 tests, 483 passing, 1 skipped (unchanged shape) — and `npm run lint`, clean.
+Frontend `npm run lint` and `npm run build`, clean. The full Playwright suite, 94 tests (89 before this
+session plus 5 new Team-page tests), run three times: the first two clean, the third had one unrelated,
+untouched recurring-generation test fail and pass cleanly on immediate isolated re-run (the same transient-
+under-load pattern noted in Session 17), followed by a fourth full run, clean. A fresh `npm run db:reset`
+(still 14 migrations — no new migration this session) followed by the backend suite once more (484/483/1,
+identical).
+
 ## What was cut
 
 Nothing was cut from goal 4's own scope — all eight specified phases, including the full required

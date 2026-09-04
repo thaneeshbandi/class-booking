@@ -807,3 +807,32 @@ backend/src/domain/sessionConflicts.js`), not invented for this file.
   of client-trusted-id shape (an IDOR waiting to happen) this codebase has consistently refused elsewhere.
   Routing to the plain, existing `/profile` keeps "whose profile am I looking at" a question the server
   answers from the session alone, never from anything the URL or the client claims.
+
+## Decision 49
+
+- **Chose:** A new, staff-only feature — a "Team" page and `POST /api/users` — lets a staff account create
+  other staff or instructor accounts directly in the app, with the password set immediately by the staff
+  member creating the account (communicated to the new hire out of band) rather than an emailed invite
+  link. `GET /api/users` (pre-existing) was tightened at the same time: it now always excludes `role =
+  'member'`, filtered or not.
+- **Rejected:** An emailed invite/set-password link; a temporary password plus a forced-change-on-first-
+  login flag; leaving account provisioning as a database-only, outside-the-application operation (a seed
+  edit or a one-off script run by whoever controls the database).
+- **Why:** This is explicitly out-of-spec — none of the README's ten mandatory goals or its own listed
+  stretch goals ask for staff to provision other accounts — added only because it was asked for directly,
+  once it became clear that without it, a real deployment (as opposed to a seeded demo) would have no
+  in-app way to get a second staff or instructor account into the system at all. An email-invite flow was
+  rejected because it would be built on infrastructure that does not actually exist: this app has no real
+  transactional email provider wired up, only the dev-only OTP stand-in `docs/architecture.md` already
+  documents as a deliberate, bounded gap. A forced-change flag was rejected as unnecessary complexity for
+  what it would add — this app already has a working, tested change-password flow on every role's own
+  profile page, so "the new hire changes it after their first login" needs no new mechanism, only a
+  reminder in the form's own copy. Direct-set-password was preferred over inaction because it is the
+  smallest addition that actually solves the real problem (see the conversation that led to this decision),
+  reusing the exact create/hash/catch-`23505` shape `routes/members.js` already established rather than
+  inventing a new one. The `GET /api/users` tightening is a genuine, separate bug this feature's own first
+  Playwright run surfaced: the route's unfiltered branch had never excluded `role = 'member'`, so an
+  unfiltered request (the new Team page's own listing call — no prior caller had ever omitted the `role`
+  filter) silently returned every self-registered member account alongside the intended staff/instructor
+  roster. Fixed at the source rather than by filtering in the frontend, since the frontend has no business
+  ever receiving member rows from this endpoint in the first place.

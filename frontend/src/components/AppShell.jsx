@@ -21,6 +21,7 @@ const STAFF_LINKS = [
   { to: '/classes', label: 'Classes', icon: 'classes' },
   { to: '/sessions', label: 'Sessions', icon: 'sessions' },
   { to: '/bookings', label: 'Bookings', icon: 'bookings' },
+  { to: '/team', label: 'Team', icon: 'shield' },
   { to: '/profile', label: 'Profile', icon: 'users' },
 ];
 
@@ -52,6 +53,7 @@ const PAGE_LABELS = [
   ['/sessions/recurring', 'Generate recurring sessions'],
   ['/sessions', 'Sessions'],
   ['/bookings', 'Bookings'],
+  ['/team', 'Team'],
   ['/profile', 'Profile'],
   ['/member/sessions', 'Sessions'],
   ['/member/bookings', 'My Bookings'],
