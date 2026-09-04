@@ -682,3 +682,28 @@ backend/src/domain/sessionConflicts.js`), not invented for this file.
   reader (it is simply one more leading character in the field's own text content, never a CSV control
   character). Covered by a new test (`tests/attendanceCsv.test.js`) verified to actually fail against the
   pre-fix code before being trusted as a real regression guard.
+
+## Decision 44
+
+- **Chose:** `GET /api/member/sessions` reports each session's own `myBooking` (the caller's live
+  `booked`/`waitlisted` claim on it, or `null`) directly on that session object, computed by joining
+  `bookings` scoped to the caller's own member id — server-side filters (`classId`, `dateFrom`/`dateTo`,
+  `availability=available|full|mine`) were added to the same endpoint. The frontend derives every
+  session card's booking state by reading that field off the session it belongs to, and tracks in-flight
+  booking requests in a `Set<sessionId>`, replacing a single `justBookedId` scalar.
+- **Rejected:** Fetching `GET /api/member/bookings` separately and cross-referencing it against the
+  session list in the browser to derive per-session state; leaving `justBookedId` in place and only
+  patching the specific symptom (clearing it differently).
+- **Why:** The reported bug's real root cause was an API contract gap, not just a frontend mistake: the
+  session-browsing endpoint never told the client which sessions the caller had already booked, so the
+  frontend had nothing authoritative to render from and fell back to "the one I most recently clicked" —
+  a single scalar that a second booking necessarily overwrote, silently reverting the first session's
+  card. Cross-referencing two separately-fetched, independently-filterable lists client-side would trade
+  one class of state bug for another the moment filters or pagination on either list stopped lining up
+  exactly — the same failure mode with a different name. Putting `myBooking` directly on each session
+  object keeps exactly one source of truth (the session's own row), lets the new `availability=mine`
+  filter reuse the identical join server-side instead of a second round trip, and makes "booking session
+  B can never change session A's own field" true by construction — A's object is never touched when B's
+  booking response is merged in. The in-flight `Set` mirrors the same principle for the one piece of
+  state that must stay client-side (which button is mid-request): keyed by session id, not a shared flag,
+  so two cards can never be confused with each other while both are submitting.

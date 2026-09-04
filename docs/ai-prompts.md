@@ -1011,3 +1011,49 @@ race test (only a sequential rejection test for each) — both paths are protect
 protocol the suite's other race tests already prove correct, so this is recorded as an honest coverage
 observation in `docs/plan.md` Session 15, not silently passed over and not treated as a defect requiring a
 new feature-shaped fix that the audit's own instructions explicitly ruled out adding.
+
+## Member session-browsing state bug, and session filters
+
+### Prompt
+
+A bug report plus a feature request in one, explicitly scoped: no unrelated changes, no rewrite of
+working mandatory functionality, preserve the existing architecture and design system. It described the
+exact symptom (booking a second member session visually reverted the first one's card from "Booked" back
+to "Book," while the backend's own booking was genuinely correct), gave an explicit expected-behavior
+list (independent per-session state, correct after refresh/filter/pagination, never a single shared
+scalar), asked for root-cause investigation *before* any fix, asked for the API response to be verified
+rather than assumed correct, asked for three member session filters (class, date/range, availability
+including a "My Booked Sessions" option) implemented server-side where the backend could reasonably
+support it, and required a Playwright regression test proven to actually fail against the pre-fix
+implementation before being trusted.
+
+### What was produced
+
+Read `MemberSessionsPage.jsx` before changing anything and found the actual bug immediately: a single
+`justBookedId` scalar, overwritten by every new booking, was the *only* thing the "Booked" badge rendered
+from — there was no per-session source of truth for it at all. Checked the backend next, per the
+brief's own instruction not to assume it was correct: `GET /api/member/sessions` never told the client
+which sessions the caller had already booked, so even a perfectly-written frontend would have had nothing
+authoritative to derive per-session state from. Fixed both: the endpoint now returns each session's own
+`myBooking` (id + status, or `null`), computed by joining `bookings` scoped to the caller's own member id;
+the frontend now reads that field directly, and tracks in-flight requests in a `Set<sessionId>` instead
+of a scalar. Added the three requested filters to the same endpoint (`classId`, `dateFrom`/`dateTo`
+resolved via the same studio-timezone `AT TIME ZONE` mechanism `recurringSchedule.js` already uses,
+`availability=available|full|mine`), reusing the existing `GET /api/classes` endpoint for the class
+filter's own options rather than adding a new one. Wrote the Playwright regression test, then verified it
+the way the brief asked: stashed only the frontend page file (kept the backend fix and the test in
+place), re-ran it, watched it fail at the exact line the bug predicts (session A's "Booked" text missing
+after booking session B), restored the fix, and confirmed the same test then passes.
+
+### What was correct
+
+The backend's `createBookingInTransaction`/`cancelBookingInTransaction` domain logic — reused unchanged
+by the new `myBooking` join and every existing member-portal route — needed no changes at all; the bug
+and the missing filters were entirely at the read-query and frontend-state layer, exactly as the brief's
+own framing suspected.
+
+### What was wrong, and what was corrected
+
+Nothing was wrong in this session's own output before verification — the regression test was written,
+proven to fail against the real bug, then proven to pass against the fix, in that order, rather than
+trusted on the first try.

@@ -20,7 +20,9 @@ happened, not a retrofit.
 | 11 | 2026-09-02, later still | Final frontend UI/UX polish — a full visual redesign, a fixed booking-table action column, a client-side recurring-generation UX pass, and a new public signup flow (migration 011, `POST /api/auth/signup`), each with new Playwright coverage; this documentation update. |
 | 12 | 2026-09-03 | Full frontend visual redesign — design tokens, a hand-rolled icon set, a redesigned app shell with a real mobile drawer, split-screen auth pages, and every page rebuilt on the new component set; one small backend addition (`bookedCount` on `GET /api/sessions`); this documentation update. |
 | 13 | 2026-09-03 | Account/member linking (migration 012), a member portal (browse/book/cancel, reusing the existing booking domain logic), a profile page for every role, forgot-password by email OTP (migration 013), and a reusable error-presentation system replacing raw `{status}: {message}` everywhere; this documentation update. |
-| 14 (this one) | 2026-09-03 | A frontend-only correction: fixed a real Bookings table structural bug (a missing `<td>` shifted every cell one column left of its header), a small table/button polish pass, a full table-structure audit across the app, one duplicate-CSS leftover removed, a new Playwright regression test, and real screenshot-based visual QA; this documentation update. |
+| 14 | 2026-09-03 | A frontend-only correction: fixed a real Bookings table structural bug (a missing `<td>` shifted every cell one column left of its header), a small table/button polish pass, a full table-structure audit across the app, one duplicate-CSS leftover removed, a new Playwright regression test, and real screenshot-based visual QA; this documentation update. |
+| 15 | 2026-09-03 | Final submission audit against `README.md` directly — one genuine gap found and fixed (CSV/formula injection in the attendance export, `domain/csv.js`); everything else audited already matched the brief with a real passing test; this documentation update. |
+| 16 (this one) | 2026-09-04 | Fixed a real member session-browsing bug (a shared `justBookedId` scalar let booking one session silently revert another's displayed state) at both the API layer (`GET /api/member/sessions` now reports each session's own `myBooking`) and the frontend (state derived per-session, never a shared flag), and added class/date/availability filters to the same endpoint; this documentation update. |
 
 Session 2's five foundation commits share one timestamp to the minute in `git log`, which is a real
 gap in this record: they clearly did not all land in the same sixty seconds, and no finer-grained
@@ -757,6 +759,38 @@ schema test every earlier session also skips) — and `npm run lint`, clean. Fro
 A fresh `npm run db:reset` (cleanly applying all 13 migrations from zero and re-seeding) followed by the
 backend suite once more (451/450/1, identical) and `npm run lint` (clean), then the Playwright suite once
 more against the freshly reset database (64/64, clean).
+
+## Session 16 — member session-browsing state bug, and session filters
+
+A user-reported bug: on the member session-browsing page, booking a second session visually reverted the
+first session's card from "Booked" back to "Book," even though the backend's own booking was correct (it
+still showed in My Bookings). Investigated before writing any fix: `MemberSessionsPage.jsx` tracked "the
+session I just booked" in one scalar, `justBookedId`, set to the newly-booked session's id and never
+reconciled against anything authoritative — booking a second session overwrote it, so the *first*
+session's card, which had no other source of booking state to read from, fell back to rendering its
+default "Book" button. Checking the backend confirmed the deeper issue: `GET /api/member/sessions` never
+told the client which sessions the caller had already booked at all — there was no way to derive correct
+state, per-session, from what the API returned, only from a single click the client happened to remember.
+
+Fixed at both layers, not just the frontend symptom (see `docs/decisions.md`, Decision 44):
+`GET /api/member/sessions` now reports each session's own `myBooking` field, and gained three query
+filters (`classId`, `dateFrom`/`dateTo` — resolved to studio-local day boundaries via the same
+`AT TIME ZONE` mechanism `recurringSchedule.js` already established, never a JavaScript-side timezone
+conversion — and `availability=available|full|mine`). The class filter reuses the existing
+`GET /api/classes` endpoint, already readable by any authenticated role; no new endpoint was needed for
+it. The frontend now derives every card's state from `session.myBooking`, and tracks in-flight booking
+requests in a `Set<sessionId>` rather than a scalar.
+
+Verified the bug, not just fixed it: wrote the Playwright regression test first, then temporarily
+reverted only the frontend page file (keeping the backend fix and the test in place) and re-ran it,
+confirming a real failure at the exact assertion the bug predicts — session A's "Booked" text missing
+after booking session B — before restoring the fix and confirming the same test passes clean.
+
+### Verification
+
+Backend `npm test --test-concurrency=1` — 457 tests, 456 passing, 1 skipped (unchanged shape) — and
+`npm run lint`, clean. Frontend `npm run lint` and `npm run build`, clean. The full Playwright suite, 70
+tests (64 before this session plus 6 new), run twice consecutively, both times clean.
 
 ## What was cut
 

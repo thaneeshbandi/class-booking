@@ -259,3 +259,157 @@ test.describe('member portal — own-bookings-only and authorization boundaries'
     await memberPage.close();
   });
 });
+
+// Regression coverage for a real bug: booking a second session was
+// silently reverting the first session's card back to "Book", because
+// booking state was tracked in one shared `justBookedId` scalar instead of
+// being read per-session from the backend. See docs/decisions.md.
+test.describe.serial('member session browsing — per-session booking state and filters', () => {
+  let page;
+  const memberEmail = `state-bug-member-${Date.now()}@example.com`;
+  const className = uniqueLabel('State Bug Class');
+
+  test.beforeAll(async ({ browser }) => {
+    const staffPage = await browser.newPage();
+    await login(staffPage, STAFF);
+
+    // A real membership, staff-created before the member ever signs up —
+    // the same claim-by-email-at-signup path `member-portal.spec.js`'s
+    // first describe block already exercises, needed here only so this
+    // member's bookings are actually allowed (a brand-new, never-linked
+    // signup starts with an already-expired membership by design).
+    await staffPage.getByRole('link', { name: 'Members' }).click();
+    await staffPage.getByRole('button', { name: 'Add member' }).click();
+    const memberDialog = staffPage.getByRole('dialog');
+    await memberDialog.getByLabel('Full name').fill('State Bug Member');
+    await memberDialog.getByLabel('Email').fill(memberEmail);
+    await memberDialog.getByLabel('Membership expires on').fill(isoDate(180));
+    await memberDialog.getByRole('button', { name: 'Add member', exact: true }).click();
+    await expect(memberDialog).not.toBeVisible();
+
+    await staffPage.getByRole('link', { name: 'Classes' }).click();
+    await staffPage.getByRole('button', { name: 'Create class' }).click();
+    const classDialog = staffPage.getByRole('dialog');
+    await classDialog.getByLabel('Title').fill(className);
+    await classDialog.getByLabel('Discipline').fill('State Bug Testing');
+    await classDialog.getByLabel('Default duration (minutes)').fill('45');
+    await classDialog.getByLabel('Default capacity').fill('5');
+    await classDialog.getByRole('button', { name: 'Create class', exact: true }).click();
+    await expect(classDialog).not.toBeVisible();
+
+    async function createSession(dayOffset) {
+      await staffPage.getByRole('link', { name: 'Sessions', exact: true }).click();
+      await staffPage.getByRole('button', { name: 'Create session' }).click();
+      const dialog = staffPage.getByRole('dialog');
+      await dialog.getByLabel('Class', { exact: true }).selectOption({ label: className });
+      await dialog.getByLabel('Primary instructor').selectOption({ label: INSTRUCTOR.fullName });
+      await dialog.getByLabel('Room').selectOption({ label: SEED_ROOM_NAME });
+      await dialog.getByLabel('Starts at (your local time)').fill(toDatetimeLocalValue(dayOffset));
+      await dialog.getByRole('button', { name: 'Create session', exact: true }).click();
+      await expect(dialog).not.toBeVisible();
+    }
+
+    // Two well-separated future days, so the two sessions can never collide
+    // with each other or with any other spec file's own fixtures.
+    await createSession(randomFutureDayOffset(2000, 700));
+    await createSession(randomFutureDayOffset(2000, 3000));
+    await staffPage.close();
+
+    page = await browser.newPage();
+    await signup(page, { fullName: 'Different Name At Signup', email: memberEmail });
+  });
+
+  test.afterAll(async () => {
+    await page.close();
+  });
+
+  test('books session A, then session B — session A must still show Booked, never reverted', async () => {
+    await page.goto('/member/sessions');
+    await page.waitForSelector('.member-session-card');
+
+    const cards = page.locator('.member-session-card').filter({ hasText: className });
+    await expect(cards).toHaveCount(2);
+
+    const cardA = cards.nth(0);
+    const cardB = cards.nth(1);
+
+    await cardA.getByRole('button', { name: /^book$/i }).click();
+    await expect(cardA.getByText('Booked', { exact: true })).toBeVisible();
+
+    // The exact bug: booking B must never revert A.
+    await cardB.getByRole('button', { name: /^book$/i }).click();
+    await expect(cardB.getByText('Booked', { exact: true })).toBeVisible();
+    await expect(cardA.getByText('Booked', { exact: true })).toBeVisible();
+    await expect(cardA.getByRole('button', { name: /^book$/i })).toHaveCount(0);
+  });
+
+  test('both bookings appear in My Bookings', async () => {
+    await page.getByRole('link', { name: 'My Bookings' }).click();
+    await expect(page).toHaveURL(/\/member\/bookings$/);
+    const rows = page.locator('table.table tbody tr').filter({ hasText: className });
+    await expect(rows).toHaveCount(2);
+    for (const row of await rows.all()) {
+      await expect(row.getByText('Booked', { exact: true })).toBeVisible();
+    }
+  });
+
+  test('surviving a refresh: both sessions still show Booked after reloading the page', async () => {
+    await page.goto('/member/sessions');
+    await page.waitForSelector('.member-session-card');
+    await page.reload();
+    await page.waitForSelector('.member-session-card');
+
+    const cards = page.locator('.member-session-card').filter({ hasText: className });
+    await expect(cards).toHaveCount(2);
+    await expect(cards.nth(0).getByText('Booked', { exact: true })).toBeVisible();
+    await expect(cards.nth(1).getByText('Booked', { exact: true })).toBeVisible();
+  });
+
+  test('the class filter narrows the list without losing either session’s Booked state', async () => {
+    await page.getByLabel('Class').selectOption({ label: className });
+    await expect(page).toHaveURL(/classId=/);
+
+    const cards = page.locator('.member-session-card').filter({ hasText: className });
+    await expect(cards).toHaveCount(2);
+    await expect(cards.nth(0).getByText('Booked', { exact: true })).toBeVisible();
+    await expect(cards.nth(1).getByText('Booked', { exact: true })).toBeVisible();
+
+    await page.getByRole('button', { name: 'Clear filters' }).click();
+    await expect(page).not.toHaveURL(/classId=/);
+  });
+
+  test('the "My booked sessions" availability filter shows both bookings, not only the most recent one', async () => {
+    await page.getByLabel('Availability').selectOption({ label: 'My booked sessions' });
+    await expect(page).toHaveURL(/availability=mine/);
+
+    const cards = page.locator('.member-session-card').filter({ hasText: className });
+    await expect(cards).toHaveCount(2);
+    await expect(cards.nth(0).getByText('Booked', { exact: true })).toBeVisible();
+    await expect(cards.nth(1).getByText('Booked', { exact: true })).toBeVisible();
+
+    await page.getByRole('button', { name: 'Clear filters' }).click();
+  });
+
+  test('cancelling one booking changes only that session’s state, in both My Bookings and the session browser', async () => {
+    await page.getByRole('link', { name: 'My Bookings' }).click();
+    const rows = page.locator('table.table tbody tr').filter({ hasText: className });
+    await expect(rows).toHaveCount(2);
+
+    // Cancel the first row only.
+    await rows.nth(0).getByRole('button', { name: 'Cancel' }).click();
+    const dialog = page.getByRole('dialog');
+    await dialog.getByRole('button', { name: /cancel booking/i }).click();
+    await expect(rows.nth(0).getByText('Cancelled', { exact: true })).toBeVisible();
+    await expect(rows.nth(1).getByText('Booked', { exact: true })).toBeVisible();
+
+    // Back on the session browser: exactly one card lost its Booked state,
+    // the other kept it.
+    await page.getByRole('link', { name: 'Sessions', exact: true }).click();
+    const cards = page.locator('.member-session-card').filter({ hasText: className });
+    await expect(cards).toHaveCount(2);
+    const bookedCards = cards.filter({ hasText: 'Booked' });
+    const bookableCards = cards.filter({ has: page.getByRole('button', { name: /^book$/i }) });
+    await expect(bookedCards).toHaveCount(1);
+    await expect(bookableCards).toHaveCount(1);
+  });
+});

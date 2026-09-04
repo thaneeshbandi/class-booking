@@ -132,6 +132,203 @@ describe('GET /api/member/sessions', () => {
     const res = await server.request({ method: 'GET', path: '/api/member/sessions' });
     assert.equal(res.status, 401);
   });
+
+  it('myBooking is null until the caller books it, then reflects the booking id and status — the root cause of the fixed frontend bug', async () => {
+    const session = await createRawSession({ capacity: 5 });
+    const { cookie, userId } = await signupMember('My Booking Field');
+    await grantMembership(userId, '2099-01-01');
+
+    const before = await server.request({ method: 'GET', path: '/api/member/sessions', cookie });
+    const beforeRow = before.json.sessions.find((row) => String(row.id) === String(session.id));
+    assert.equal(beforeRow.myBooking, null);
+
+    const bookRes = await server.request({
+      method: 'POST',
+      path: '/api/member/bookings',
+      cookie,
+      body: { sessionId: session.id },
+    });
+    assert.equal(bookRes.status, 201);
+
+    const after = await server.request({ method: 'GET', path: '/api/member/sessions', cookie });
+    const afterRow = after.json.sessions.find((row) => String(row.id) === String(session.id));
+    assert.ok(afterRow.myBooking, 'myBooking is populated once the caller has booked this session');
+    assert.equal(String(afterRow.myBooking.id), String(bookRes.json.booking.id));
+    assert.equal(afterRow.myBooking.status, 'booked');
+  });
+
+  it('myBooking reflects a waitlisted status, and is per-session — booking a second session never changes the first session’s myBooking', async () => {
+    const sessionA = await createRawSession({ capacity: 1 });
+    const sessionB = await createRawSession({ capacity: 5 });
+    const filler = await signupMember('Waitlist Filler');
+    await grantMembership(filler.userId, '2099-01-01');
+    await server.request({
+      method: 'POST',
+      path: '/api/member/bookings',
+      cookie: filler.cookie,
+      body: { sessionId: sessionA.id },
+    });
+
+    const { cookie, userId } = await signupMember('Two Session Booker');
+    await grantMembership(userId, '2099-01-01');
+
+    const bookA = await server.request({
+      method: 'POST',
+      path: '/api/member/bookings',
+      cookie,
+      body: { sessionId: sessionA.id },
+    });
+    assert.equal(bookA.json.booking.status, 'waitlisted');
+
+    let list = await server.request({ method: 'GET', path: '/api/member/sessions', cookie });
+    let rowA = list.json.sessions.find((row) => String(row.id) === String(sessionA.id));
+    assert.equal(rowA.myBooking.status, 'waitlisted');
+
+    const bookB = await server.request({
+      method: 'POST',
+      path: '/api/member/bookings',
+      cookie,
+      body: { sessionId: sessionB.id },
+    });
+    assert.equal(bookB.json.booking.status, 'booked');
+
+    // The exact bug this fix closes: booking session B must never change
+    // session A's own myBooking field.
+    list = await server.request({ method: 'GET', path: '/api/member/sessions', cookie });
+    rowA = list.json.sessions.find((row) => String(row.id) === String(sessionA.id));
+    const rowB = list.json.sessions.find((row) => String(row.id) === String(sessionB.id));
+    assert.ok(rowA.myBooking, 'session A still shows a booking after booking session B');
+    assert.equal(rowA.myBooking.status, 'waitlisted');
+    assert.ok(rowB.myBooking, 'session B shows its own booking');
+    assert.equal(rowB.myBooking.status, 'booked');
+  });
+
+  it('filters by classId', async () => {
+    const [otherClass] = await db('classes')
+      .insert({
+        title: `Member Portal Other Class ${RUN}`,
+        discipline: 'Testing',
+        default_duration_minutes: 45,
+        default_capacity: 3,
+      })
+      .returning('*');
+    const [otherRoom] = await db('rooms').insert({ name: `Member Portal Other Room ${RUN}` }).returning('*');
+
+    const inClass = await createRawSession({ capacity: 5 });
+    const [otherClassSession] = await db('sessions')
+      .insert({
+        class_id: otherClass.id,
+        primary_instructor_id: fixture.instructor.id,
+        room_id: otherRoom.id,
+        starts_at: new Date(Date.now() + 24 * 3_600_000),
+        duration_minutes: 45,
+        capacity: 3,
+      })
+      .returning('*');
+
+    const { cookie } = await signupMember('Class Filter Member');
+    const res = await server.request({
+      method: 'GET',
+      path: `/api/member/sessions?classId=${fixture.class.id}`,
+      cookie,
+    });
+    assert.equal(res.status, 200);
+    const ids = res.json.sessions.map((row) => String(row.id));
+    assert.ok(ids.includes(String(inClass.id)));
+    assert.ok(!ids.includes(String(otherClassSession.id)));
+  });
+
+  it('filters by dateFrom/dateTo using the studio-local calendar day, inclusive on both ends', async () => {
+    const { rows } = await db.raw(`SELECT to_char((now() AT TIME ZONE ?), 'YYYY-MM-DD') AS today`, [
+      env.STUDIO_TIMEZONE,
+    ]);
+    const today = rows[0].today;
+    const addDays = (isoDate, days) => {
+      const [y, m, d] = isoDate.split('-').map(Number);
+      return new Date(Date.UTC(y, m - 1, d + days)).toISOString().slice(0, 10);
+    };
+
+    // Three sessions on three well-separated studio-local days, each set
+    // near local noon so they land inside their intended civil day
+    // regardless of the studio's own UTC offset.
+    const dayNear = addDays(today, 300);
+    const dayMid = addDays(today, 320);
+    const dayFar = addDays(today, 340);
+    const atNoon = async (isoDate) => {
+      const { rows: r } = await db.raw(`SELECT ((?::date)::timestamp + interval '12 hours') AT TIME ZONE ? AS ts`, [
+        isoDate,
+        env.STUDIO_TIMEZONE,
+      ]);
+      return r[0].ts;
+    };
+
+    const sessionNear = await createRawSession({ capacity: 5, startsAt: await atNoon(dayNear) });
+    const sessionMid = await createRawSession({ capacity: 5, startsAt: await atNoon(dayMid) });
+    const sessionFar = await createRawSession({ capacity: 5, startsAt: await atNoon(dayFar) });
+
+    const { cookie } = await signupMember('Date Filter Member');
+    const res = await server.request({
+      method: 'GET',
+      path: `/api/member/sessions?dateFrom=${dayMid}&dateTo=${dayMid}`,
+      cookie,
+    });
+    assert.equal(res.status, 200);
+    const ids = res.json.sessions.map((row) => String(row.id));
+    assert.ok(ids.includes(String(sessionMid.id)), 'the in-range session is included');
+    assert.ok(!ids.includes(String(sessionNear.id)), 'a session before dateFrom is excluded');
+    assert.ok(!ids.includes(String(sessionFar.id)), 'a session after dateTo is excluded');
+  });
+
+  it('filters by availability=available, full, and mine', async () => {
+    const fullSession = await createRawSession({ capacity: 1 });
+    const availableSession = await createRawSession({ capacity: 5 });
+
+    const { cookie, userId } = await signupMember('Availability Filter Member');
+    await grantMembership(userId, '2099-01-01');
+    await server.request({
+      method: 'POST',
+      path: '/api/member/bookings',
+      cookie,
+      body: { sessionId: fullSession.id },
+    });
+
+    const availableRes = await server.request({
+      method: 'GET',
+      path: '/api/member/sessions?availability=available',
+      cookie,
+    });
+    const availableIds = availableRes.json.sessions.map((row) => String(row.id));
+    assert.ok(availableIds.includes(String(availableSession.id)));
+    assert.ok(!availableIds.includes(String(fullSession.id)));
+
+    const fullRes = await server.request({
+      method: 'GET',
+      path: '/api/member/sessions?availability=full',
+      cookie,
+    });
+    const fullIds = fullRes.json.sessions.map((row) => String(row.id));
+    assert.ok(fullIds.includes(String(fullSession.id)));
+    assert.ok(!fullIds.includes(String(availableSession.id)));
+
+    const mineRes = await server.request({
+      method: 'GET',
+      path: '/api/member/sessions?availability=mine',
+      cookie,
+    });
+    const mineIds = mineRes.json.sessions.map((row) => String(row.id));
+    assert.ok(mineIds.includes(String(fullSession.id)), 'a session the caller booked appears under "mine"');
+    assert.ok(!mineIds.includes(String(availableSession.id)), 'a session the caller never booked does not');
+  });
+
+  it('rejects a malformed date filter with 400', async () => {
+    const { cookie } = await signupMember('Bad Date Filter Member');
+    const res = await server.request({
+      method: 'GET',
+      path: '/api/member/sessions?dateFrom=not-a-date',
+      cookie,
+    });
+    assert.equal(res.status, 400);
+  });
 });
 
 describe('POST /api/member/bookings', () => {

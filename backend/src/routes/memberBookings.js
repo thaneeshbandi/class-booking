@@ -8,11 +8,19 @@ import {
   createBookingInTransaction,
   translateBookingPgError,
 } from '../domain/bookingTransaction.js';
+import { env } from '../config/env.js';
 import { db } from '../db/knex.js';
 import { authenticate } from '../middleware/authenticate.js';
 import { requireRole } from '../middleware/authorize.js';
 import { idParamSchema } from '../validation/ids.js';
 import { zodErrorResponse } from '../validation/respond.js';
+
+/** A booking that currently holds a live claim on its session — the same
+ * pair `createBookingInTransaction`'s own duplicate-active-booking check
+ * uses. Used here to decide "does the caller already have a booking on this
+ * session" (`GET /sessions`'s `myBooking` field and the `mine` availability
+ * filter), never to decide occupancy — that stays `OCCUPYING_STATUSES`. */
+const ACTIVE_BOOKING_STATUSES = ['booked', 'waitlisted'];
 
 /**
  * The member portal's own booking surface — browsing, creating, listing and
@@ -53,9 +61,43 @@ async function requireOwnMember(req, res) {
   return member;
 }
 
-router.get('/sessions', async (_req, res, next) => {
+const isoDateSchema = z.string().regex(/^\d{4}-\d{2}-\d{2}$/, 'must be YYYY-MM-DD.');
+
+const listMemberSessionsQuerySchema = z.object({
+  classId: idParamSchema.optional(),
+  // Both ends optional and independent: `dateFrom` alone means "from this
+  // day on", `dateTo` alone means "up to and including this day", both
+  // together means a range, matching how a From/To pair of date pickers
+  // naturally behaves.
+  dateFrom: isoDateSchema.optional(),
+  dateTo: isoDateSchema.optional(),
+  availability: z.enum(['available', 'full', 'mine']).optional(),
+});
+
+/**
+ * Browse upcoming sessions — every field a member's own booking state
+ * (`myBooking`) needs to be derived from, in this single response. This is
+ * the fix for a real frontend bug: without this field, the browsing page
+ * had no authoritative source for "have I already booked this session" at
+ * all, and fell back to a client-only "I just clicked this one" flag that a
+ * second booking silently overwrote. `myBooking` is `null` unless the
+ * caller currently holds a live (`booked`/`waitlisted`) claim on that
+ * session — computed by joining `bookings` scoped to the caller's own
+ * member id, the same `requireOwnMember`-derived id every other route here
+ * already trusts, never anything client-supplied.
+ */
+router.get('/sessions', async (req, res, next) => {
   try {
-    const rows = await db('sessions')
+    const parsed = listMemberSessionsQuerySchema.safeParse(req.query);
+    if (!parsed.success) {
+      return res.status(400).json(zodErrorResponse(parsed.error));
+    }
+    const { classId, dateFrom, dateTo, availability } = parsed.data;
+
+    const member = await requireOwnMember(req, res);
+    if (!member) return;
+
+    let query = db('sessions')
       .join('classes', 'classes.id', 'sessions.class_id')
       .join('rooms', 'rooms.id', 'sessions.room_id')
       .join('users', 'users.id', 'sessions.primary_instructor_id')
@@ -69,9 +111,53 @@ router.get('/sessions', async (_req, res, next) => {
         'occupancy.session_id',
         'sessions.id',
       )
+      .leftJoin(
+        db('bookings')
+          .select('id', 'session_id', 'status')
+          .where('member_id', member.id)
+          .whereIn('status', ACTIVE_BOOKING_STATUSES)
+          .as('my_booking'),
+        'my_booking.session_id',
+        'sessions.id',
+      )
       .where('sessions.starts_at', '>=', db.fn.now())
       .whereNull('classes.archived_at')
-      .whereNull('rooms.archived_at')
+      .whereNull('rooms.archived_at');
+
+    if (classId) {
+      query = query.where('sessions.class_id', classId);
+    }
+    if (dateFrom) {
+      // Studio-local midnight on `dateFrom`, converted to the correct
+      // instant by Postgres's own `AT TIME ZONE` — the same mechanism
+      // `recurringSchedule.js#localTimestampString` and the seed script use
+      // for the identical local-wall-clock-to-instant problem, never a
+      // second, hand-rolled timezone conversion in JavaScript.
+      query = query.where(
+        'sessions.starts_at',
+        '>=',
+        db.raw('(?::date)::timestamp AT TIME ZONE ?', [dateFrom, env.STUDIO_TIMEZONE]),
+      );
+    }
+    if (dateTo) {
+      // Strictly before studio-local midnight the day *after* `dateTo` —
+      // an exclusive upper bound, so `dateTo` itself is fully included
+      // regardless of what local time a session that day starts at.
+      query = query.where(
+        'sessions.starts_at',
+        '<',
+        db.raw('(?::date + 1)::timestamp AT TIME ZONE ?', [dateTo, env.STUDIO_TIMEZONE]),
+      );
+    }
+    if (availability === 'mine') {
+      query = query.whereNotNull('my_booking.id');
+    } else if (availability === 'available') {
+      query = query.whereRaw('COALESCE(occupancy.booked_count, 0) < sessions.capacity');
+    } else if (availability === 'full') {
+      query = query.whereRaw('COALESCE(occupancy.booked_count, 0) >= sessions.capacity');
+    }
+
+    const rows = await query
       .select(
         'sessions.id',
         'sessions.starts_at',
@@ -83,6 +169,8 @@ router.get('/sessions', async (_req, res, next) => {
         'rooms.name as room_name',
         'users.full_name as instructor_name',
         db.raw('COALESCE(occupancy.booked_count, 0) AS booked_count'),
+        'my_booking.id as my_booking_id',
+        'my_booking.status as my_booking_status',
       )
       .orderBy('sessions.starts_at', 'asc');
 
@@ -99,6 +187,7 @@ router.get('/sessions', async (_req, res, next) => {
           class: { id: row.class_id, title: row.class_title, discipline: row.class_discipline },
           room: { name: row.room_name },
           instructor: { fullName: row.instructor_name },
+          myBooking: row.my_booking_id ? { id: row.my_booking_id, status: row.my_booking_status } : null,
         };
       }),
     });
