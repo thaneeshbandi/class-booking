@@ -1230,3 +1230,46 @@ Two real issues, both surfaced by this feature's own first Playwright test run, 
    (no Team link at all), which is what revealed the real cause. Corrected by scoping the locator to
    `nav.sidebar-nav` (matching `account-security.spec.js`'s own established pattern for this exact kind of
    ambiguity) and renaming the test fixtures to avoid the word "Team" entirely.
+
+## Deployment guidance, and a cross-site cookie bug found before it shipped
+
+### Prompt
+
+A series of questions, not a code request at first: given all the test data used during development, how
+would deployment actually work, and how would anyone access a staff or instructor account after a real
+deploy — asked generically at first, then specifically once the user named the intended stack: "Database —
+a managed service such as Supabase... Server-side code — Render... Browser-side code — Vercel," asking for
+the exact steps. Finally, after a first detailed walkthrough of those steps: "Do anything you want to add,
+but tell me exactly what i should do."
+
+### What was produced
+
+Read the actual code before writing any deployment instructions, rather than giving generic platform
+advice: `backend/src/config/env.js`, `knexfile.js`, `middleware/cors.js`, and `auth/cookies.js`. That
+reading surfaced a real bug the first draft of the deployment answer had to account for: the session
+cookie's `sameSite: 'lax'` was unconditional across every environment, but Supabase/Render/Vercel puts the
+frontend and backend on different domains, and browsers never attach a `SameSite=Lax` cookie to a
+cross-site `fetch()` call — meaning login would appear to succeed while every request after it looked
+unauthenticated. Flagged this explicitly before giving the rest of the steps, rather than writing a
+deployment guide that would silently fail at the login step. Once given permission ("do anything you want
+to add"), fixed it: `sameSite: isProduction ? 'none' : 'lax'`, with a comment explaining why this isn't a
+CSRF regression (this API's CORS configuration — one exact allowed origin, JSON-only mutating routes
+forcing a preflight — already does the job `SameSite=Lax` was doing). Verified with the full backend suite,
+lint, and the full Playwright suite (all of which run same-site, so they confirm the unconditional branch
+is unchanged, not the new production-only one) before documenting the fix in `docs/decisions.md`, Decision
+50.
+
+### What was correct
+
+The deployment walkthrough itself (Supabase connection string → migrate/seed once from a local machine →
+Render backend with the matching env vars → Vercel frontend pointed at the Render URL → circle back to set
+`FRONTEND_ORIGIN`) needed no changes once written — it matched exactly what this project's own existing env
+vars (`DATABASE_SSL`, `FRONTEND_ORIGIN`, `VITE_API_BASE_URL`) were already built to support.
+
+### What was wrong, and what was corrected
+
+The cookie bug above is the significant one: nothing in this project's existing 94-test Playwright suite or
+484-test backend suite could ever have caught it, since every test runs frontend and backend on the same
+site. It was found by reasoning through the real deployment topology before writing instructions for it,
+not by a failing test — worth recording here because it is exactly the kind of gap "the tests are green" can
+hide.

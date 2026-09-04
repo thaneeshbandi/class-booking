@@ -836,3 +836,22 @@ backend/src/domain/sessionConflicts.js`), not invented for this file.
   filter) silently returned every self-registered member account alongside the intended staff/instructor
   roster. Fixed at the source rather than by filtering in the frontend, since the frontend has no business
   ever receiving member rows from this endpoint in the first place.
+
+## Decision 50
+
+- **Chose:** The session cookie's `sameSite` attribute is now environment-dependent —
+  `isProduction ? 'none' : 'lax'` (`auth/cookies.js`) — instead of always `'lax'`.
+- **Rejected:** Leaving `sameSite: 'lax'` unconditional across every environment.
+- **Why:** Discovered while working through the actual deployment topology this project's own env vars were
+  already built for (`DATABASE_SSL`, `FRONTEND_ORIGIN`, `VITE_API_BASE_URL` all exist specifically for a
+  split Supabase/Render/Vercel deploy). Frontend and backend hosted on different registrable domains makes
+  every API call a cross-site request, and browsers never attach a `SameSite=Lax` cookie to a cross-site
+  `fetch()` — only to a top-level navigation. Left unconditional, the app would have shipped a login that
+  appeared to work (the `Set-Cookie` response arrives and is stored) while every subsequent request looked
+  unauthenticated, since the cookie would never actually be sent back — a bug that would only surface after
+  a real deploy, not in local dev where the frontend and backend already share a site. This is not a CSRF
+  regression: every state-changing route in this API only accepts `Content-Type: application/json`, which
+  forces a CORS preflight, and `middleware/cors.js` allows exactly one configured origin — a third-party
+  page's preflight fails before the browser ever sends the real request, so CORS is already doing the job
+  `SameSite=Lax` would have. Local dev and tests keep `'lax'` (same-site there, and marginally safer where
+  it costs nothing) rather than switching everything to `'none'` unconditionally.

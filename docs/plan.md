@@ -974,6 +974,33 @@ under-load pattern noted in Session 17), followed by a fourth full run, clean. A
 (still 14 migrations — no new migration this session) followed by the backend suite once more (484/483/1,
 identical).
 
+## Session 20 — deployment guidance, and a real cross-site cookie bug found before it shipped
+
+Walked through what deploying to the specific stack this project's own env vars were already built for
+(Supabase for the database, Render for the backend, Vercel for the frontend) would actually require, step
+by step, before touching any code. That walkthrough surfaced a genuine bug that had never been exercised:
+the session cookie's `sameSite: 'lax'` (unconditional, every environment) would silently break login the
+moment frontend and backend are on different domains, because browsers never attach a `SameSite=Lax`
+cookie to a cross-site `fetch()` call — only to a top-level navigation. Every previous session's own
+Playwright/backend testing ran frontend and backend on the same site (different ports only), so this never
+had a chance to surface until actually reasoning through the real deployment topology. Fixed in
+`auth/cookies.js`: `sameSite` is now `isProduction ? 'none' : 'lax'` — see `docs/decisions.md`, Decision
+50, for why this isn't a CSRF regression (CORS, not `SameSite`, is what actually blocks a third-party site's
+credentialed request here, since every mutating route requires a JSON body and therefore a preflight this
+app's CORS middleware only ever approves for one exact configured origin).
+
+No other code changes this session — this was a one-line, narrowly-scoped correctness fix caught by
+reasoning through a real deployment scenario rather than by a failing test (nothing in the existing suite
+could have caught it, since nothing in it deploys the two halves to different origins).
+
+### Verification
+
+Backend `npm test` — 484 tests, 483 passing, 1 skipped (unchanged shape, confirming no test depended on the
+old unconditional `'lax'` value) — and `npm run lint`, clean. The full Playwright suite, 94/94, clean (dev/
+test environments stay on `'lax'`, so this run exercises the unchanged branch — the changed, production-
+only branch is inherently something this local suite cannot exercise, and is instead verified by the
+deployment steps themselves).
+
 ## What was cut
 
 Nothing was cut from goal 4's own scope — all eight specified phases, including the full required
