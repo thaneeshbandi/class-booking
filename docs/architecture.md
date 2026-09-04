@@ -506,12 +506,18 @@ three shapes the milestone's brief asked for, used by the new member-portal/prof
   *other* active session or device, only the credential needed to start a new one. Adding revocation
   would mean adding exactly the kind of server-side session state that token's own design deliberately
   avoids; the accepted tradeoff is documented, not silent — see Decision 36.
-- **Real transactional email delivery.** `email/emailService.js`'s webhook provider is genuinely
-  swappable (any provider can sit behind a generic POST), but no real provider account exists to
-  integrate against or test — deployment itself is out of scope for this submission (see
-  `SUBMISSION.md`). Production is configured to *refuse to start sending email at all* rather than
-  silently fall back to logging, so this is a documented configuration requirement for a real deploy, not
-  a working integration this repository has actually exercised.
+- **A specific vendor SDK for email (SendGrid, SES, Postmark, ...) — largely superseded.** `email/
+  emailService.js` gained a real, direct SMTP provider (`EMAIL_PROVIDER=smtp`, via `nodemailer`) alongside
+  the existing generic webhook provider — see `docs/decisions.md`, Decision 52. It only needs credentials
+  from any ordinary SMTP relay (a Gmail app password, Mailtrap, Resend/Brevo's SMTP endpoint, a company
+  mail server, ...), not a vendor SDK or a separate relay server. What remains an honest, stated gap: this
+  development sandbox has no outbound network access to a raw SMTP port (verified directly — an attempt to
+  send through a real, disposable Ethereal test account timed out on the TCP connection itself, HTTPS-only
+  egress), so the SMTP provider's actual `sendMail` call has been reviewed and reasoned through but never
+  executed against a real mail server. No SMTP or webhook credentials are configured for this project's own
+  deployed instance either, so no reset email has actually been delivered from the live app. Production is
+  still configured to *refuse to start sending email at all* if neither provider is configured, rather than
+  silently falling back to logging.
 - **Periodic cleanup of expired `password_reset_otps` rows.** See `docs/schema.md`'s "what would break
   first at 100x" — correctness never depends on old rows being pruned (every read filters on
   `expires_at`/`consumed_at`/`attempts`), so this is a real but non-urgent maintenance task, not a

@@ -26,8 +26,8 @@ request can take up to a minute.>
 | Frontend | React 18 + Vite, plain JavaScript, hand-written CSS design system (tokens, shared component classes), ~25 hand-rolled inline SVG icons (no icon library, no component framework, no TypeScript) | Built after every server-side goal was done, tested, and audited; visually redesigned in a later milestone — see `docs/architecture.md` and `docs/decisions.md`, Decision 29 |
 | Backend | Node.js, Express, Knex (query builder + migrations) over `pg` | See `docs/decisions.md` |
 | Database | PostgreSQL 17 (Docker locally; not yet deployed) | See `docs/schema.md` |
-| Email (password-reset OTPs) | A small hand-rolled provider abstraction (`backend/src/email/emailService.js`) — a dev/console provider by default, a generic swappable webhook provider for a real deployment; no third-party email SDK | No existing email infrastructure in this codebase before this milestone, and no real provider account to integrate against — see `docs/decisions.md`, Decision 39 |
-| Hosting | Not deployed yet | Frontend and backend are both complete; deployment itself hasn't happened yet |
+| Email (password-reset OTPs) | A small hand-rolled provider abstraction (`backend/src/email/emailService.js`) — a dev/console provider by default, plus two real options for a deployment: a direct SMTP provider (`nodemailer`) and a generic swappable webhook provider; no third-party email SDK | See `docs/decisions.md`, Decisions 39 and 52. SMTP's code path has been reviewed but not executed against a real mail server — this development sandbox has no outbound access to a raw SMTP port — and no real credentials are configured for the deployed instance, so no reset email has actually been delivered from the live app; see `docs/architecture.md`'s "What was deliberately not built" |
+| Hosting | Deployed: Vercel (frontend, with a same-origin `/api/*` rewrite proxy to the backend — see `docs/decisions.md`, Decision 51), Render (backend), Supabase (PostgreSQL) | See `docs/plan.md`, Sessions 20–21, for the deployment work and the cross-site session-cookie issue it surfaced and fixed |
 
 ## Goal checklist
 

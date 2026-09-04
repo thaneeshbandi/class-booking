@@ -95,6 +95,27 @@ export async function logout(page) {
 }
 
 /**
+ * Creates a fresh staff or instructor account through the Team page
+ * (`POST /api/users`), assuming `page` is already logged in as staff. Used
+ * anywhere a test needs a real staff/instructor login of its own to act on
+ * (e.g. resetting its password) — never the seeded `STAFF`/`INSTRUCTOR`
+ * fixtures above, which every other spec file's own login calls depend on
+ * keeping their original `SEED_PASSWORD`.
+ */
+export async function createTeamMember(page, { fullName, email, role, password }) {
+  await page.locator('nav.sidebar-nav').getByRole('link', { name: 'Team' }).click();
+  await expect(page).toHaveURL(/\/team$/);
+  await page.getByRole('button', { name: 'Add team member' }).click();
+  const dialog = page.getByRole('dialog');
+  await dialog.getByLabel('Full name').fill(fullName);
+  await dialog.getByLabel('Email').fill(email);
+  await dialog.getByLabel('Role').selectOption(role);
+  await dialog.getByLabel('Temporary password').fill(password);
+  await dialog.getByRole('button', { name: 'Add team member', exact: true }).click();
+  await expect(dialog).not.toBeVisible();
+}
+
+/**
  * Attaches console/page-error/network-failure listeners to `page` and
  * returns an object the test uses to assert nothing unexpected happened.
  * Diagnostics are collected for the whole test, not just one action, and

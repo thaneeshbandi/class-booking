@@ -1037,6 +1037,65 @@ new `vite.config.js` dev-server proxy end to end (every login, every authenticat
 download's `Content-Disposition` header) through the identical same-origin shape the Vercel rewrite gives
 production, which is what actually proves the architecture works rather than merely compiles.
 
+## Session 22 — forgot password, made completely working end-to-end
+
+An explicit request to make the whole forgot-password flow genuinely complete, prefaced by a full audit
+before any changes: inspect the existing OTP/reset-token/email-provider implementation, state exactly what
+already works and what doesn't, and don't assume the existing tests prove correctness on their own.
+
+**Audit findings.** Most of the flow was already solid: `crypto.randomInt` (never `Math.random`) for OTP
+generation, HMAC-only storage (never plaintext), a 10-minute expiry, a 5-attempt cap enforced server-side,
+single-use consumption, newest-OTP-supersedes-old, a structurally separate purpose-scoped reset token
+(`auth/resetTokens.js`) the reset step independently re-validates against the database rather than trusting
+the token alone, anti-enumeration on the request step, the dev-OTP route's `!isProduction` gate, and reset
+never touching `members` at all by construction (Argon2id reused correctly for the new password). Real gaps
+found: the only "real" production email path (a generic webhook) required standing up a *second* server to
+receive it before it could send anything; a genuine timing side-channel (the request handler `await`ed the
+email send, so a real account's response latency depended on real network latency an attacker could
+measure); no HTML email, no expiry/security copy in the template; no staff/instructor/member-linking test
+coverage; no test that production genuinely cannot reach the dev-OTP route. Full detail, including what was
+deliberately left as-is, is in the conversation itself and `docs/decisions.md`, Decisions 52–54.
+
+**What was built.** `email/emailService.js` gained a real SMTP provider (`nodemailer`, `EMAIL_PROVIDER=smtp`)
+alongside the existing webhook one, and both now send an HTML body alongside plain text from one shared
+template. `POST /forgot-password/request` no longer `await`s the email send — fired in the background,
+failure only logged server-side — closing the timing side-channel, and now returns `expiresInMinutes`/
+`cooldownSeconds` (fixed constants, safe to expose) so the frontend's copy is never a second, hand-typed
+number. The dev-OTP route's regex was made copy-format-independent. `ForgotPasswordPage.jsx` gained expiry
+copy, a live resend-cooldown countdown, a client-side-only "too many attempts" nudge that never asks the
+server to confirm anything it wouldn't already say (Decision 54), and "use a different email"/"request a
+new code" links so the user is never stranded mid-flow. The success copy now matches the exact wording
+asked for. No schema or migration change was needed — the existing `password_reset_otps` table was already
+correct for every requirement audited against it.
+
+**Tests added**, all through real HTTP against a running app and a live database, none against mocked
+internals: staff and instructor reset (via fresh accounts created through the Team feature, never the
+shared seeded fixtures every other test file's own logins depend on), a member-linking-safety test (staff
+creates a member, a signup links it, reset changes only the linked user's password — full name, membership
+expiry, and the link itself all provably untouched, no duplicate member), a no-password-hash-leak test, and
+— the one genuinely new testing technique this session needed — a real, separate child process spawned with
+`NODE_ENV=production` to prove the dev-OTP route is a plain 404 there, since `isProduction` is resolved once
+at module-import time and cannot be flipped inside an already-running test process. Playwright gained
+staff/instructor role coverage (again via fresh Team-created accounts, not the seeded ones), plus UX-level
+tests for the expiry/cooldown copy, the attempt nudge, a reused-OTP-after-reset rejection, the "never
+stranded" navigation, and client-side mismatch validation.
+
+**What was verified, and what wasn't.** Attempted a genuine SMTP send using a real, disposable Ethereal test
+account (nodemailer's own standard way to test against a throwaway inbox with no pre-existing credentials)
+— the TCP connection to port 587 timed out; this development sandbox only has outbound HTTPS egress, not
+arbitrary SMTP ports. The SMTP provider's code was reviewed carefully but never actually executed against a
+real mail server, and no SMTP/webhook credentials are configured for this project's own deployed instance
+either — no reset email has been delivered from the live app. This is stated plainly here and in
+`docs/architecture.md` rather than left implied by "the tests pass."
+
+### Verification
+
+Backend `npm test` — 489 tests, 488 passing, 1 skipped (unchanged shape) — and `npm run lint`, clean.
+Frontend `npm run lint` and `npm run build`, clean. The full Playwright suite, 100 tests (94 before this
+session plus 6 new), run three times across this session, all clean. A fresh `npm run db:reset` (still 14
+migrations — no new migration needed) followed by the backend suite once more (489/488/1, identical) and
+the full Playwright suite once more against the freshly reset database (100/100, clean).
+
 ## What was cut
 
 Nothing was cut from goal 4's own scope — all eight specified phases, including the full required

@@ -150,8 +150,16 @@ const forgotPasswordRequestSchema = z.object({
   email: z.string().trim().toLowerCase().min(1, 'Email is required.').email('Enter a valid email address.'),
 });
 
+// `expiresInMinutes` is a fixed constant (`OTP_TTL_MS`, never anything
+// per-request), so surfacing it here doesn't weaken the response's own
+// anti-enumeration guarantee below — every caller sees the same value
+// regardless of whether an OTP was actually generated. It exists so the
+// frontend's expiry copy is read from the one place the real TTL lives,
+// never a second, hand-typed "10 minutes" that could quietly drift from it.
 const GENERIC_REQUEST_RESPONSE = {
   message: 'If an account exists for that email, a verification code has been sent.',
+  expiresInMinutes: Math.round(OTP_TTL_MS / 60_000),
+  cooldownSeconds: Math.round(OTP_REQUEST_COOLDOWN_MS / 1000),
 };
 
 router.post('/forgot-password/request', async (req, res, next) => {
@@ -184,7 +192,20 @@ router.post('/forgot-password/request', async (req, res, next) => {
         // Nothing explicitly invalidates the previous OTP row — `/verify`
         // and `/reset` only ever consider the newest row for a user, so an
         // older one is already unusable the moment a new one is inserted.
-        await sendOtpEmail(user.email, otp);
+        //
+        // Deliberately NOT awaited: a real provider (SMTP/webhook) makes a
+        // genuine network call here, and awaiting it would make this
+        // response's latency depend on whether an email was actually sent —
+        // a timing side-channel an attacker could use to distinguish a real
+        // account (waits on the network call) from a nonexistent one
+        // (returns immediately) even though the response body is identical
+        // either way. The response below is sent as soon as the OTP row is
+        // committed; the send happens in the background, and a failure is
+        // only ever logged server-side — the client already got the one
+        // honest answer this endpoint ever gives.
+        sendOtpEmail(user.email, otp).catch((error) => {
+          console.error('[forgot-password] failed to send OTP email:', error);
+        });
       }
     }
 
@@ -323,7 +344,10 @@ if (!isProduction) {
     if (!entry) {
       return res.status(404).json({ error: 'No dev email found for that address.' });
     }
-    const match = /code is (\d{6})/.exec(entry.text);
+    // A bare 6-digit run, not tied to one exact phrasing of the email copy
+    // (`email/emailService.js#buildOtpEmailContent`) — the OTP is the only
+    // 6-digit number that template ever contains.
+    const match = /\b(\d{6})\b/.exec(entry.text);
     res.json({ otp: match ? match[1] : null });
   });
 }

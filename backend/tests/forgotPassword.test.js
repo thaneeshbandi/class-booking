@@ -1,8 +1,12 @@
 import assert from 'node:assert/strict';
+import { spawn } from 'node:child_process';
+import path from 'node:path';
 import { after, before, describe, it } from 'node:test';
+import { setTimeout as delay } from 'node:timers/promises';
 
 import { OTP_REQUEST_COOLDOWN_MS } from '../src/auth/otp.js';
 import { verifyPassword } from '../src/auth/password.js';
+import { backendRoot, env } from '../src/config/env.js';
 import { closeConnection, db } from '../src/db/knex.js';
 import { startTestServer } from './helpers/httpClient.js';
 
@@ -51,8 +55,39 @@ async function fetchDevOtp(email) {
   return res.json.otp;
 }
 
+async function loginAs(email, password) {
+  const res = await server.request({ method: 'POST', path: '/api/auth/login', body: { email, password } });
+  assert.equal(res.status, 200, `login as ${email} must succeed: ${res.raw}`);
+  return res.cookie;
+}
+
+/**
+ * A fresh staff or instructor account, created through `POST /api/users`
+ * (staff-only) rather than reused from the seed — the seeded staff/
+ * instructor accounts (`ada.okonkwo@studio.test` etc.) are shared fixtures
+ * every other test file logs into with `env.SEED_PASSWORD`; actually
+ * resetting one of their passwords here would break every test that runs
+ * after this file in the same suite. Cleanup is by email, same as every
+ * other account this file creates (see `after`, below).
+ */
+async function createStaffOrInstructor(role, fullName, password = 'original-password-1') {
+  const staffCookie = await loginAs(seedStaff.email, env.SEED_PASSWORD);
+  const email = uniqueEmail(`forgot-${role}`);
+  const res = await server.request({
+    method: 'POST',
+    path: '/api/users',
+    cookie: staffCookie,
+    body: { fullName, email, role, password },
+  });
+  assert.equal(res.status, 201, `creating a fresh ${role} account must succeed: ${res.raw}`);
+  return { email, password };
+}
+
+let seedStaff;
+
 before(async () => {
   server = await startTestServer();
+  seedStaff = await db('users').where({ role: 'staff', is_active: true }).first();
 });
 
 after(async () => {
@@ -301,5 +336,177 @@ describe('POST /api/auth/forgot-password/verify + reset', () => {
       body: { email, otp, newPassword: 'a-real-password-123', confirmNewPassword: 'a-real-password-123' },
     });
     assert.equal(res.status, 400, 'reset has no email/otp fields — a resetToken is required');
+  });
+});
+
+/** Runs the full request -> verify -> reset cycle and returns the reset's
+ * own response, for tests that only care about the end state. */
+async function resetPasswordFor(email, newPassword) {
+  await server.request({ method: 'POST', path: '/api/auth/forgot-password/request', body: { email } });
+  const otp = await fetchDevOtp(email);
+  const verify = await server.request({
+    method: 'POST',
+    path: '/api/auth/forgot-password/verify',
+    body: { email, otp },
+  });
+  assert.equal(verify.status, 200, verify.raw);
+  const reset = await server.request({
+    method: 'POST',
+    path: '/api/auth/forgot-password/reset',
+    body: { resetToken: verify.json.resetToken, newPassword, confirmNewPassword: newPassword },
+  });
+  return { verify, reset };
+}
+
+describe('every login-capable role can reset its password', () => {
+  it('staff account: the full flow works, and only the new password logs in afterward', async () => {
+    const { email, password: oldPassword } = await createStaffOrInstructor('staff', 'Forgot Staff');
+    const newPassword = 'staff-reset-password-1';
+    const { reset } = await resetPasswordFor(email, newPassword);
+    assert.equal(reset.status, 200, reset.raw);
+
+    const oldLogin = await server.request({ method: 'POST', path: '/api/auth/login', body: { email, password: oldPassword } });
+    assert.equal(oldLogin.status, 401, 'the old password must no longer work');
+    const newLogin = await server.request({ method: 'POST', path: '/api/auth/login', body: { email, password: newPassword } });
+    assert.equal(newLogin.status, 200, newLogin.raw);
+    assert.equal(newLogin.json.user.role, 'staff');
+  });
+
+  it('instructor account: the full flow works, and only the new password logs in afterward', async () => {
+    const { email, password: oldPassword } = await createStaffOrInstructor('instructor', 'Forgot Instructor');
+    const newPassword = 'instructor-reset-password-1';
+    const { reset } = await resetPasswordFor(email, newPassword);
+    assert.equal(reset.status, 200, reset.raw);
+
+    const oldLogin = await server.request({ method: 'POST', path: '/api/auth/login', body: { email, password: oldPassword } });
+    assert.equal(oldLogin.status, 401);
+    const newLogin = await server.request({ method: 'POST', path: '/api/auth/login', body: { email, password: newPassword } });
+    assert.equal(newLogin.status, 200, newLogin.raw);
+    assert.equal(newLogin.json.user.role, 'instructor');
+  });
+
+  it("member account: reset changes only the linked user's password — member profile, membership, and the link itself are untouched, and no duplicate member is created", async () => {
+    const staffCookie = await loginAs(seedStaff.email, env.SEED_PASSWORD);
+    const email = uniqueEmail('forgot-member');
+    const createMember = await server.request({
+      method: 'POST',
+      path: '/api/members',
+      cookie: staffCookie,
+      body: { fullName: 'Staff Set Name', email, membershipExpiresOn: '2099-01-01' },
+    });
+    assert.equal(createMember.status, 201, createMember.raw);
+    const memberId = createMember.json.member.id;
+
+    const oldPassword = 'member-old-password-1';
+    const signupRes = await server.request({
+      method: 'POST',
+      path: '/api/auth/signup',
+      body: { fullName: 'Whatever The Signup Form Had', email, password: oldPassword },
+    });
+    assert.equal(signupRes.status, 201, signupRes.raw);
+
+    const newPassword = 'member-new-password-1';
+    const { reset } = await resetPasswordFor(email, newPassword);
+    assert.equal(reset.status, 200, reset.raw);
+
+    const members = await db('members').where({ email });
+    assert.equal(members.length, 1, 'still exactly one member row — reset never created a duplicate');
+    assert.equal(String(members[0].id), String(memberId));
+    assert.equal(members[0].full_name, 'Staff Set Name', "staff-set name untouched by the member's own password reset");
+    assert.equal(members[0].membership_expires_on, '2099-01-01', 'membership expiry untouched');
+
+    const user = await db('users').where({ email }).first();
+    assert.equal(String(members[0].user_id), String(user.id), 'the member is still linked to the same user');
+
+    const oldLogin = await server.request({ method: 'POST', path: '/api/auth/login', body: { email, password: oldPassword } });
+    assert.equal(oldLogin.status, 401);
+    const newLogin = await server.request({ method: 'POST', path: '/api/auth/login', body: { email, password: newPassword } });
+    assert.equal(newLogin.status, 200, newLogin.raw);
+  });
+
+  it('the verify and reset responses never include a password hash or any user object', async () => {
+    const { email } = await signup('No Leak');
+    await server.request({ method: 'POST', path: '/api/auth/forgot-password/request', body: { email } });
+    const otp = await fetchDevOtp(email);
+    const verify = await server.request({
+      method: 'POST',
+      path: '/api/auth/forgot-password/verify',
+      body: { email, otp },
+    });
+    assert.equal(verify.status, 200, verify.raw);
+    assert.deepEqual(Object.keys(verify.json).sort(), ['resetToken']);
+    assert.doesNotMatch(verify.raw, /password_hash|passwordHash/i);
+
+    const reset = await server.request({
+      method: 'POST',
+      path: '/api/auth/forgot-password/reset',
+      body: {
+        resetToken: verify.json.resetToken,
+        newPassword: 'no-leak-password-1',
+        confirmNewPassword: 'no-leak-password-1',
+      },
+    });
+    assert.equal(reset.status, 200, reset.raw);
+    assert.deepEqual(Object.keys(reset.json).sort(), ['message']);
+    assert.doesNotMatch(reset.raw, /password_hash|passwordHash/i);
+  });
+});
+
+/** Polls `/health` until it responds or `timeoutMs` elapses — the only
+ * reliable way to know a just-spawned server process has finished starting
+ * up, short of parsing its stdout. */
+async function waitForHealth(port, timeoutMs = 10_000) {
+  const deadline = Date.now() + timeoutMs;
+  let lastError;
+  while (Date.now() < deadline) {
+    try {
+      const res = await fetch(`http://127.0.0.1:${port}/health`);
+      if (res.ok) return;
+    } catch (error) {
+      lastError = error;
+    }
+    await delay(100);
+  }
+  throw new Error(`Production child process never became healthy on port ${port}: ${lastError}`);
+}
+
+describe('production: the dev OTP route does not exist', () => {
+  // `isProduction` is resolved once at module import time (src/config/env.js),
+  // so there is no way to flip it inside *this* already-running test process
+  // — the only genuine way to prove the dev route is unreachable in
+  // production is to actually run the server with NODE_ENV=production, in a
+  // real separate process, and make a real HTTP request against it.
+  it('GET /api/auth/forgot-password/dev/last-otp is a plain 404 when NODE_ENV=production', async () => {
+    const port = 45391;
+    const child = spawn(process.execPath, [path.join(backendRoot, 'src', 'server.js')], {
+      env: { ...process.env, NODE_ENV: 'production', PORT: String(port) },
+      stdio: ['ignore', 'pipe', 'pipe'],
+    });
+    let output = '';
+    child.stdout.on('data', (chunk) => {
+      output += chunk;
+    });
+    child.stderr.on('data', (chunk) => {
+      output += chunk;
+    });
+
+    try {
+      await waitForHealth(port).catch((error) => {
+        throw new Error(`${error.message}\nchild output:\n${output}`);
+      });
+
+      const health = await fetch(`http://127.0.0.1:${port}/health`);
+      const healthBody = await health.json();
+      assert.equal(healthBody.environment, 'production', 'confirms this really is a production-mode process');
+
+      const devRoute = await fetch(
+        `http://127.0.0.1:${port}/api/auth/forgot-password/dev/last-otp?email=anyone@example.test`,
+      );
+      assert.equal(devRoute.status, 404, 'the dev OTP route must not exist at all in production');
+      const body = await devRoute.json();
+      assert.equal(body.error, 'Not found', 'the app\'s own ordinary 404 — not a route-specific "forbidden"');
+    } finally {
+      child.kill();
+    }
   });
 });

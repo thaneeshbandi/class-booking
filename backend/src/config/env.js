@@ -95,11 +95,22 @@ export const envSchema = z.object({
   // Selects the email provider `src/email/emailService.js` sends
   // password-reset OTPs through. Unset in development/test resolves to a
   // console/dev provider that never touches a real inbox; production must
-  // set this to a real provider (currently only "webhook" — see
+  // set this to a real provider ("smtp" or "webhook" — see
   // `emailService.js`) or the app refuses to start sending email at all.
-  EMAIL_PROVIDER: z.enum(['webhook']).optional(),
+  EMAIL_PROVIDER: z.enum(['webhook', 'smtp']).optional(),
   EMAIL_WEBHOOK_URL: z.string().url().optional(),
   EMAIL_WEBHOOK_TOKEN: z.string().min(1).optional(),
+
+  // Required only when EMAIL_PROVIDER=smtp: a standard SMTP relay (Gmail
+  // with an app password, Mailtrap, Resend/Brevo's SMTP endpoint, etc.) —
+  // this is the path that lets a real deployment send real email without
+  // first standing up a separate webhook relay server.
+  SMTP_HOST: z.string().min(1).optional(),
+  SMTP_PORT: z.coerce.number().int().positive().max(65535).optional(),
+  SMTP_SECURE: booleanish.optional(),
+  SMTP_USER: z.string().min(1).optional(),
+  SMTP_PASS: z.string().min(1).optional(),
+  SMTP_FROM: z.string().min(1).optional(),
 });
 
 export class EnvValidationError extends Error {

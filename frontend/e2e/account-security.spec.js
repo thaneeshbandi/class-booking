@@ -1,6 +1,6 @@
 import { expect, test } from '@playwright/test';
 
-import { INSTRUCTOR, STAFF, login } from './fixtures.js';
+import { INSTRUCTOR, STAFF, createTeamMember, login, logout } from './fixtures.js';
 
 /**
  * Forgot password (email OTP) and every role's profile page. The OTP is
@@ -65,7 +65,7 @@ test.describe('forgot password — email OTP', () => {
     await page.getByLabel('Confirm new password').fill('post-reset-password-789');
     await page.getByRole('button', { name: 'Reset password' }).click();
 
-    await expect(page.getByText('Your password has been reset.')).toBeVisible();
+    await expect(page.getByText('Password reset successfully. You can now sign in with your new password.')).toBeVisible();
     await page.getByRole('link', { name: 'Go to sign in' }).click();
     await expect(page).toHaveURL(/\/login$/);
 
@@ -106,6 +106,171 @@ test.describe('forgot password — email OTP', () => {
     // branch in the frontend that could show a different outcome for an
     // unknown email, matching the backend's identical generic response.
     await expect(page.getByLabel('Verification code')).toBeVisible();
+  });
+
+  test('the OTP step shows expiry information and a working resend cooldown', async ({ page }) => {
+    const email = `otp-ux-${Date.now()}@example.com`;
+    await signup(page, { fullName: 'Otp Ux Member', email });
+    await page.getByRole('button', { name: 'Log out' }).click();
+
+    await page.goto('/forgot-password');
+    await page.getByLabel('Email').fill(email);
+    await page.getByRole('button', { name: 'Send verification code' }).click();
+    await expect(page.getByLabel('Verification code')).toBeVisible();
+
+    // Expiry copy, driven by the backend's own `expiresInMinutes` (never a
+    // second, hand-typed number on the frontend) — see `docs/decisions.md`.
+    await expect(page.getByText('This code expires in 10 minutes.')).toBeVisible();
+
+    // The resend cooldown starts the moment a code is sent — including the
+    // very first send, not just a subsequent resend — so the button is
+    // already disabled with a visible countdown as soon as this step
+    // renders. A deterministic, immediate UI check, not a real 30-second
+    // wait for the cooldown to actually elapse.
+    const resend = page.getByRole('button', { name: /^Resend code/ });
+    await expect(resend).toBeDisabled();
+    await expect(resend).toHaveText(/Resend code \(\d+s\)/);
+  });
+
+  test('two wrong codes in a row surfaces a "request a new code" nudge, without ever confirming why', async ({ page }) => {
+    const email = `otp-nudge-${Date.now()}@example.com`;
+    await signup(page, { fullName: 'Otp Nudge Member', email });
+    await page.getByRole('button', { name: 'Log out' }).click();
+
+    await page.goto('/forgot-password');
+    await page.getByLabel('Email').fill(email);
+    await page.getByRole('button', { name: 'Send verification code' }).click();
+    await expect(page.getByLabel('Verification code')).toBeVisible();
+
+    for (let attempt = 0; attempt < 2; attempt += 1) {
+      await page.getByLabel('Verification code').fill('000000');
+      await page.getByRole('button', { name: 'Verify code' }).click();
+      await expect(page.getByRole('alert')).toBeVisible();
+    }
+
+    // A purely client-side nudge, distinct from — and shown alongside — the
+    // backend's own unchanged generic error message.
+    await expect(page.getByRole('button', { name: 'request a new code' })).toBeVisible();
+  });
+
+  test('an already-used code is rejected the same generic way on a second attempt, and "Use a different email" never leaves the user stuck', async ({ page }) => {
+    const email = `otp-reuse-${Date.now()}@example.com`;
+    await signup(page, { fullName: 'Otp Reuse Member', email });
+    await page.getByRole('button', { name: 'Log out' }).click();
+
+    await page.goto('/forgot-password');
+    await page.getByLabel('Email').fill(email);
+    await page.getByRole('button', { name: 'Send verification code' }).click();
+    await expect(page.getByLabel('Verification code')).toBeVisible();
+
+    const otp = await fetchDevOtp(page, email);
+    await page.getByLabel('Verification code').fill(otp);
+    await page.getByRole('button', { name: 'Verify code' }).click();
+    await expect(page.getByLabel('New password', { exact: true })).toBeVisible();
+    await page.getByLabel('New password', { exact: true }).fill('reuse-guard-password-1');
+    await page.getByLabel('Confirm new password').fill('reuse-guard-password-1');
+    await page.getByRole('button', { name: 'Reset password' }).click();
+    await expect(page.getByText('Password reset successfully. You can now sign in with your new password.')).toBeVisible();
+
+    // Start a second forgot-password attempt and try the now-consumed code.
+    await page.getByRole('link', { name: 'Go to sign in' }).click();
+    await page.goto('/forgot-password');
+    await page.getByLabel('Email').fill(email);
+    await page.getByRole('button', { name: 'Send verification code' }).click();
+    await expect(page.getByLabel('Verification code')).toBeVisible();
+    await page.getByLabel('Verification code').fill(otp);
+    await page.getByRole('button', { name: 'Verify code' }).click();
+
+    const alert = page.getByRole('alert');
+    await expect(alert).toBeVisible();
+    await expect(alert).toContainText('invalid or has expired');
+    await expect(page.getByLabel('New password')).toHaveCount(0);
+
+    // Never stranded: a working way back to the start of the flow.
+    await page.getByRole('button', { name: 'Use a different email' }).click();
+    await expect(page.getByLabel('Email')).toBeVisible();
+    await expect(page.getByLabel('Verification code')).toHaveCount(0);
+  });
+
+  test('a password/confirmation mismatch is caught client-side, before any reset request is made', async ({ page }) => {
+    const email = `otp-mismatch-${Date.now()}@example.com`;
+    await signup(page, { fullName: 'Otp Mismatch Member', email });
+    await page.getByRole('button', { name: 'Log out' }).click();
+
+    await page.goto('/forgot-password');
+    await page.getByLabel('Email').fill(email);
+    await page.getByRole('button', { name: 'Send verification code' }).click();
+    await expect(page.getByLabel('Verification code')).toBeVisible();
+
+    const otp = await fetchDevOtp(page, email);
+    await page.getByLabel('Verification code').fill(otp);
+    await page.getByRole('button', { name: 'Verify code' }).click();
+    await expect(page.getByLabel('New password', { exact: true })).toBeVisible();
+
+    await page.getByLabel('New password', { exact: true }).fill('mismatch-password-1');
+    await page.getByLabel('Confirm new password').fill('a-different-password-2');
+    await expect(page.getByText('New password and confirmation do not match.')).toBeVisible();
+    await expect(page.getByRole('button', { name: 'Reset password' })).toBeDisabled();
+  });
+});
+
+test.describe('forgot password — staff and instructor roles', () => {
+  const instructorEmail = `forgot-instructor-${Date.now()}@example.com`;
+  const instructorName = 'Forgot Flow Instructor';
+  const staffEmail = `forgot-staff-${Date.now()}@example.com`;
+  const staffName = 'Forgot Flow Staff';
+  const tempPassword = 'a-real-password-123';
+
+  test.beforeAll(async ({ browser }) => {
+    const page = await browser.newPage();
+    await login(page, STAFF);
+    await createTeamMember(page, { fullName: instructorName, email: instructorEmail, role: 'instructor', password: tempPassword });
+    await createTeamMember(page, { fullName: staffName, email: staffEmail, role: 'staff', password: tempPassword });
+    await logout(page);
+    await page.close();
+  });
+
+  async function resetPasswordThroughUi(page, email, newPassword) {
+    await page.goto('/forgot-password');
+    await page.getByLabel('Email').fill(email);
+    await page.getByRole('button', { name: 'Send verification code' }).click();
+    await expect(page.getByLabel('Verification code')).toBeVisible();
+
+    const otp = await fetchDevOtp(page, email);
+    await page.getByLabel('Verification code').fill(otp);
+    await page.getByRole('button', { name: 'Verify code' }).click();
+
+    await expect(page.getByLabel('New password', { exact: true })).toBeVisible();
+    await page.getByLabel('New password', { exact: true }).fill(newPassword);
+    await page.getByLabel('Confirm new password').fill(newPassword);
+    await page.getByRole('button', { name: 'Reset password' }).click();
+    await expect(page.getByText('Password reset successfully. You can now sign in with your new password.')).toBeVisible();
+    await page.getByRole('link', { name: 'Go to sign in' }).click();
+    await expect(page).toHaveURL(/\/login$/);
+  }
+
+  test('an instructor account: reset via forgot-password, then log in with the new password', async ({ page }) => {
+    const newPassword = 'instructor-reset-password-1';
+    await resetPasswordThroughUi(page, instructorEmail, newPassword);
+
+    await login(page, { email: instructorEmail, password: newPassword });
+    await expect(page).toHaveURL(/\/sessions$/);
+    await page.locator('.sidebar-footer').click();
+    await expect(page).toHaveURL(/\/profile$/);
+    await expect(page.locator('.profile-header').getByText(instructorName)).toBeVisible();
+    await expect(page.locator('.profile-header').getByText('Instructor', { exact: true })).toBeVisible();
+  });
+
+  test('a staff account: reset via forgot-password, then log in with the new password', async ({ page }) => {
+    const newPassword = 'staff-reset-password-1';
+    await resetPasswordThroughUi(page, staffEmail, newPassword);
+
+    await login(page, { email: staffEmail, password: newPassword });
+    await expect(page).toHaveURL(/\/dashboard$/);
+    await page.locator('.sidebar-footer').click();
+    await expect(page).toHaveURL(/\/profile$/);
+    await expect(page.locator('.profile-header').getByText(staffName)).toBeVisible();
+    await expect(page.locator('.profile-header').getByText('Staff', { exact: true })).toBeVisible();
   });
 });
 

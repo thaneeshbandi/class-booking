@@ -890,3 +890,75 @@ backend/src/domain/sessionConflicts.js`), not invented for this file.
   (`middleware/cors.js`) is unchanged and still correctly configured — it simply stops being the thing a
   browser-driven request ever needs to satisfy, since the browser no longer sees a cross-origin request at
   all; it remains relevant only for the escape-hatch direct-call path `VITE_API_BASE_URL` still allows.
+
+## Decision 52
+
+- **Chose:** `email/emailService.js` gained a second real provider, `smtp` (`EMAIL_PROVIDER=smtp`), built
+  on `nodemailer`, alongside the existing `webhook` provider — selected the same lazy, env-var-only way.
+  Both providers now send an HTML body alongside plain text, built by one shared `buildOtpEmailContent`
+  function so the two can never drift out of sync with each other.
+- **Rejected:** A specific vendor SDK (SendGrid/SES/Postmark/etc.) directly; leaving only the webhook
+  provider (Decision 39's original choice).
+- **Why:** Decision 39 chose a generic webhook specifically because "deployment is explicitly out of scope
+  for this submission" at the time — that premise no longer holds; the app is now actually deployed
+  (Supabase/Render/Vercel). A generic webhook is still genuinely swappable, but it requires standing up a
+  *second* server (something that receives the webhook POST and actually forwards it to a real email
+  service) before "real working email" is possible at all — a meaningfully higher bar than most people
+  asked to demonstrate this feature could clear. SMTP needs only credentials from any ordinary relay
+  (a Gmail app password, Mailtrap, Resend/Brevo's SMTP endpoint, a company mail server) and nothing else to
+  host. `nodemailer` was chosen over hand-rolling the SMTP protocol for the same reason `pg`/`knex`/`zod`
+  are already dependencies here: a well-established, single-purpose library for a genuinely non-trivial
+  protocol, not a place to save one dependency by reimplementing it badly. The originally-installed
+  `nodemailer@^6` resolved to a version with several known high-severity advisories (SMTP command
+  injection among them); pinned to the current major (`^10`) instead, with a clean `npm audit` for this
+  package specifically. **Honest limitation, not silently glossed over:** this development sandbox has no
+  outbound network access to a raw SMTP port (confirmed directly — a real, disposable Ethereal test
+  account's TCP connection on port 587 timed out; only HTTPS egress is reachable here), so `smtpProvider`'s
+  actual `sendMail` call has been reviewed but never executed against a real mail server, and no SMTP or
+  webhook credentials are configured for the project's own deployed instance — no reset email has actually
+  been delivered from the live app. See `docs/architecture.md`'s "What was deliberately not built" section.
+
+## Decision 53
+
+- **Chose:** `POST /forgot-password/request` no longer `await`s `sendOtpEmail(...)` before responding — the
+  send is fired without awaiting, its rejection only ever logged server-side (`.catch(...)`), and the
+  response goes out as soon as the OTP row is committed (or immediately, for a nonexistent email).
+- **Rejected:** Leaving the `await` in place (the original implementation); adding an artificial matching
+  delay to the "nonexistent email" branch to equalize timing instead of removing the slow branch's own
+  network dependency.
+- **Why:** A genuine account-enumeration side-channel, found during this milestone's own security audit,
+  not present in any existing test: for a real account, the response waited on a real network call to the
+  email provider (up to seconds, real-world SMTP/webhook latency); for a nonexistent one, it returned
+  almost immediately. An attacker measuring response latency alone — never reading the response body, which
+  is already identical either way — could distinguish the two, defeating the anti-enumeration guarantee
+  Decision 39's own generic-response design already established for the *content* of the response. Not
+  awaiting the send removes the dominant, most exploitable part of that gap (the network call), rather than
+  trying to match its cost artificially, which would be both fragile (real network latency varies far more
+  than any fixed delay could imitate) and pointless complexity for a fix that already exists by simply not
+  waiting. A smaller, residual timing difference remains — an existing account's branch still does one
+  extra indexed `SELECT` and one `INSERT` a nonexistent email's branch skips — accepted as a minor, largely
+  unavoidable difference (true database-round-trip timing can never be perfectly equalized either way) far
+  smaller than the network-call gap this decision actually closes, not a silently-ignored one.
+
+## Decision 54
+
+- **Chose:** `POST /forgot-password/verify` keeps returning the exact same generic
+  `{ error: 'That code is invalid or has expired.' }` for every negative outcome — wrong code, expired
+  code, no code ever requested for that email, and a code that has exhausted its attempt limit — rather
+  than a distinct message for "too many attempts." The frontend adds a purely client-side, cosmetically
+  similar nudge ("Too many attempts? You can request a new code.") after two failed submissions *in the
+  browser's own count*, shown alongside — never replacing — the backend's unchanged message.
+- **Rejected:** Returning a distinct backend message once `record.attempts >= OTP_MAX_ATTEMPTS` is reached
+  (the milestone's own example error copy, "Too many attempts. Please request a new code.", reads as if it
+  belongs here).
+- **Why:** A real, if narrow, anti-enumeration gap would open if the backend ever distinguished this case:
+  "too many attempts" can only ever be true for an email that has a real account *and* an OTP record that
+  was actually requested recently — a nonexistent email always short-circuits to the same generic response
+  before any attempts logic is even reached (`!user` → immediate generic response). Returning a different
+  message specifically when attempts are exhausted would let an attacker submit six guesses against any
+  candidate email and learn, from the response alone, whether that email has a real account with a live
+  reset in progress — exactly the signal Decision 39's request-step design already refuses to leak, just
+  reached through the verify step instead. The client-side nudge gets the same helpful UX outcome (a
+  legitimate user who is clearly stuck gets pointed at "request a new code") without ever asking the server
+  to confirm anything it wouldn't already say — it counts the browser's own failed submissions, nothing the
+  server reports back.

@@ -1327,3 +1327,67 @@ to every test this project has (nothing in the suite deploys to two real differe
 surfaced once the app was actually deployed and used in a real browser — exactly the kind of thing "the
 tests are green" cannot catch, and exactly why this correction is recorded here rather than treated as if
 the first fix had simply been finished from the start.
+
+## Forgot password, made completely working end-to-end
+
+### Prompt
+
+A long, explicitly-numbered request (22 sections) to make the entire forgot-password flow genuinely
+complete, opening with a hard instruction: audit the existing implementation first — every layer, from the
+OTP/reset-token design through the frontend, error handling, and existing tests — and report exactly what
+already works versus what's incomplete, explicitly not assuming existing tests already prove correctness.
+Then, itemized requirements across the whole flow: anti-enumeration on the request step with rate limiting,
+a full OTP security checklist (secure randomness, hashed storage, expiry, attempt limits, single use,
+purpose-scoping), a real email provider — "not just console.log(otp)" — with a proper templated email, a
+purpose-specific short-lived reset authorization rather than the OTP directly changing the password, correct
+member/user-linking behavior on reset, a stated position on session behavior after reset given the existing
+stateless JWT architecture, polished frontend UX (expiry/cooldown/attempt messaging, never leaving the user
+stranded), a 20-item backend test list, a full Playwright test list across all three roles, an explicit
+security review (enumeration, replay, substitution, hash leakage, production dev-route exposure), and a
+documentation/verification/commit checklist ending in one incremental commit, not pushed.
+
+### What was produced
+
+The audit came first, genuinely — every file the prompt named was read before anything was changed. Most
+of the existing implementation held up well (see the audit summary given directly to the user, and
+`docs/plan.md`'s own Session 22 entry): correct crypto, correct hashing, correct expiry/attempt/single-use
+enforcement, a genuinely purpose-scoped and independently-re-validated reset token, correct anti-
+enumeration on the request step, a correctly-gated dev-only OTP route, and reset code that never touches
+`members` at all by construction. Real gaps were found and fixed rather than assumed absent: added a real
+SMTP email provider (`nodemailer`) alongside the existing webhook one, since the webhook alone required
+standing up a second server before "real email" was possible at all; found and closed a genuine
+account-enumeration timing side-channel (the request handler awaited the email send, making response
+latency a signal); built a proper HTML+text email template; added expiry/cooldown/attempt-limit UX and
+never-stranded navigation to the frontend; added the missing staff/instructor/member-linking/no-hash-leak
+test coverage; and — the one genuinely new testing technique needed — spawned a real, separate child
+process with `NODE_ENV=production` to prove the dev-OTP route is actually unreachable there, since that
+flag is resolved once at module-import time and cannot be flipped inside the already-running test process.
+Every new backend/instructor/staff test used freshly-created accounts (via the Team feature built in an
+earlier session) rather than the shared seeded fixtures, specifically to avoid corrupting every other test
+file's own `SEED_PASSWORD`-based logins.
+
+### What was correct
+
+The audit's own conclusion — that most of the existing OTP/reset-token design was already sound and did not
+need rebuilding — held up through implementation; nothing from that "already correct" list needed touching.
+
+### What was wrong, and what was corrected
+
+Two things caught before being trusted as done, both against this session's own new code, not the
+pre-existing implementation:
+
+1. **A real regression, self-caught before running any tests**: the new email template changed "Your
+   verification code is 123456." to "Your verification code is: 123456" (a colon added) — small, but it
+   broke the dev-OTP route's extraction regex (`/code is (\d{6})/`, which requires a literal space, not a
+   colon, before the digits), which every existing test and the whole Playwright suite depends on to read
+   the OTP at all. Caught immediately by running the existing test suite before writing any new tests —
+   nearly every test in the file failed with a 400 where 200 was expected — root-caused to the regex, not
+   the OTP logic itself, and fixed by making the extraction pattern copy-format-independent.
+2. **An honesty check that changed a documentation claim before it was ever written wrong for long**: while
+   drafting `docs/architecture.md`'s update, the first draft was about to claim the new SMTP provider had
+   been "exercised locally against a real SMTP relay." Before writing that, it was actually attempted — a
+   real, disposable Ethereal test account was created and a real send attempted — which revealed this
+   development sandbox has no outbound access to a raw SMTP port at all (only HTTPS egress; the TCP
+   connection to port 587 timed out). The claim was corrected to state plainly that the SMTP provider's
+   code was reviewed but never actually executed against a real mail server, per this milestone's own
+   explicit instruction not to claim a real email was delivered unless it actually was.
