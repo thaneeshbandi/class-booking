@@ -1,10 +1,12 @@
 # Schema
 
 Ten tables, three enums, one owner-only append-only table, one composite foreign key doing real work.
-Migrations live in `backend/migrations/001`–`013`; this describes what they actually built, verified
+Migrations live in `backend/migrations/001`–`014`; this describes what they actually built, verified
 live against PostgreSQL by `backend/tests/schema.test.js`. Migrations `012` (a `user_id` link on
 `members`) and `013` (`password_reset_otps`) were added in the account-linking/member-portal/
-forgot-password milestone — see `docs/decisions.md`, Decisions 32 and 37–38.
+forgot-password milestone — see `docs/decisions.md`, Decisions 32 and 37–38. Migration `014` later added
+a `UNIQUE (email)` constraint on `members`, reversing that table's original non-unique design — see
+Decision 47 and the `members` table entry below.
 
 ## Enums
 
@@ -44,14 +46,16 @@ still never a merged identity — see Decision 32.
 |---|---|---|
 | id | bigint identity | PK |
 | full_name | text | non-empty |
-| email | text | shaped, lower-cased, but **not unique** |
+| email | text | shaped, lower-cased, `CHECK`-normalised, and (migration 014) `UNIQUE` |
 | membership_expires_on | date | drives goal 4's eligibility rule and goal 10's alerts |
 | user_id | bigint, nullable | (migration 012) FK → users, `UNIQUE`, `ON DELETE SET NULL` |
 | created_at, updated_at | timestamptz | |
 
-`email` is deliberately non-unique: a member is identified by their row, not their address (one
-parent's email on two children's memberships is ordinary for a studio, and members never log in, so
-there's no authentication reason to force uniqueness).
+`email` was originally deliberately non-unique — a parent's email on two children's memberships was
+treated as ordinary, and members never log in, so there was no authentication reason to force
+uniqueness. Migration `014` reversed that: `members_email_unique` now enforces one row per email at the
+database level, translated by `routes/members.js` into a plain `409` on conflict. See Decision 47 for
+the full reasoning and why the original design (documented above until this correction) was rejected.
 
 `user_id` is the account/member-linking milestone's addition (migration `012`): nullable because most
 `members` rows are staff-created and have no login at all, and that stays true after this migration —

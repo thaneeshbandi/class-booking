@@ -4,20 +4,23 @@ Fill this in and commit it. This is the first file we open.
 
 ## Links
 
-- **GitHub repository:** <public repo URL>
-- **Live application:** <deployed URL>
+- **GitHub repository:** https://github.com/thaneeshbandi/class-booking
+- **Live application:** https://class-booking-theta.vercel.app
 
 ## Notes for the reviewer
 
-<Anything we should know before opening the link — e.g. your host sleeps when idle and the first
-request can take up to a minute.>
+The backend is hosted on Render's free tier, which sleeps after a period of inactivity. The first
+request after a period of idleness can take up to a minute or so to wake it up — a slow first load (or
+a login that appears to hang briefly) is the host waking up, not a broken deployment. Refreshing or
+retrying once it's warm will be fast.
 
 ## Demo credentials
 
 | Role | Email | Password |
 |------|-------|----------|
-| <role 1> | | |
-| <role 2> | | |
+| Staff | thaneeshbandi@gmail.com | Thaneesh@12345 |
+| Instructor | ksaijeevankada@gmail.com | Saijeevan@123 |
+| Member | thaneeshbandi98@gmail.com | Thaneesh@123 |
 
 ## Stack
 
@@ -25,8 +28,8 @@ request can take up to a minute.>
 |-------|---------------|-----|
 | Frontend | React 18 + Vite, plain JavaScript, hand-written CSS design system (tokens, shared component classes), ~25 hand-rolled inline SVG icons (no icon library, no component framework, no TypeScript) | Built after every server-side goal was done, tested, and audited; visually redesigned in a later milestone — see `docs/architecture.md` and `docs/decisions.md`, Decision 29 |
 | Backend | Node.js, Express, Knex (query builder + migrations) over `pg` | See `docs/decisions.md` |
-| Database | PostgreSQL 17 (Docker locally; not yet deployed) | See `docs/schema.md` |
-| Email (password-reset OTPs) | A small hand-rolled provider abstraction (`backend/src/email/emailService.js`) — a dev/console provider by default, plus three real options for a deployment: Resend's HTTPS API (`fetch`-based, no SDK), a direct SMTP provider (`nodemailer`), and a generic swappable webhook provider | See `docs/decisions.md`, Decisions 39, 52, and 55. SMTP was actually deployed to Render and failed (`ETIMEDOUT` on port 587 — Render's outbound network doesn't reliably reach SMTP ports, confirmed in its own logs); **Resend is the provider that works from this deployment** (HTTPS-only) but still needs `RESEND_API_KEY`/`RESEND_FROM` set on Render before a real reset email will actually send — see `docs/architecture.md`'s "What was deliberately not built" for exactly what has and hasn't been verified |
+| Database | PostgreSQL 17 — Docker locally, **Supabase (managed Postgres) in production** | See `docs/schema.md` |
+| Email (password-reset OTPs) | A small hand-rolled provider abstraction (`backend/src/email/emailService.js`) — a dev/console provider by default, plus three real options for a deployment: Resend's HTTPS API (`fetch`-based, no SDK), a direct SMTP provider (`nodemailer`), and a generic swappable webhook provider | See `docs/decisions.md`, Decisions 39, 52, and 55. SMTP was actually deployed to Render and failed (`ETIMEDOUT` on port 587 — Render's outbound network doesn't reliably reach SMTP ports, confirmed in its own logs); **Resend is the provider actually running in production**, currently sending from Resend's shared sandbox address (`onboarding@resend.dev`, Resend's default verified sender) rather than a custom domain — a real custom "from" address would need a domain verified with Resend, which hasn't been set up. Password-reset email is confirmed working end to end from the live deployment with this sender. |
 | Hosting | Deployed: Vercel (frontend, with a same-origin `/api/*` rewrite proxy to the backend — see `docs/decisions.md`, Decision 51), Render (backend), Supabase (PostgreSQL) | See `docs/plan.md`, Sessions 20–21, for the deployment work and the cross-site session-cookie issue it surfaced and fixed |
 
 ## Goal checklist
@@ -61,11 +64,27 @@ idea is complete.
 
 ## Verification
 
-What was actually run, most recently: backend `npm test --test-concurrency=1` — 450 tests, 449 passing,
-1 skipped (an `APP_DB_URL`-gated schema test, skipped whenever that optional role isn't configured, same
-as every earlier run) — run twice, then again after a fresh `npm run db:reset` (now applying all 13
-migrations); `npm run lint` clean on both `backend/` and `frontend/`; `npm run build` clean on
-`frontend/`. Full detail, including every session's exact commands and results, is in `docs/plan.md`.
+What was actually run, most recently (`docs/plan.md`, Session 23): backend `npm test` — 501 tests, 500
+passing, 1 skipped (the same `APP_DB_URL`-gated schema test, skipped whenever that optional role isn't
+configured) — and `npm run lint`, clean; a fresh `npm run db:reset` (14 migrations) followed by the
+backend suite once more, clean. Frontend `npm run lint` and `npm run build`, clean; the full Playwright
+suite, 100/100, needed no new coverage that session and stayed clean. Full detail, including every
+session's exact commands and results, is in `docs/plan.md`.
+
+A later, documentation/deployment-only pass (no application code changed) added a Vercel SPA-fallback
+rewrite so a direct browser refresh on a nested client-side route (e.g. `/dashboard`) resolves correctly
+instead of a hard 404, plus a small new regression test (`frontend/tests/vercelConfig.test.js`, 3 tests,
+run via `npm test` in `frontend/`) asserting the `/api` rewrite and the SPA-fallback rewrite both exist
+and stay correctly ordered. `npm run lint` and `npm run build` in `frontend/` stayed clean.
+
+**On Playwright determinism:** the suite runs clean immediately after a fresh `npm run db:reset`, as
+documented above and throughout `docs/plan.md`. It is not guaranteed clean across an unlimited number of
+consecutive runs *without* an intervening reset: a small number of fixtures pick a randomized future
+date to avoid colliding with existing seeded/session data, described in the fixture's own comment as
+"essentially never" colliding rather than "never." A later verification pass in this repository's history
+did observe exactly that — one `polish.spec.js` failure (99/100) after several repeated un-reset runs,
+traced to a random-date collision with leftover data, confirmed not a product regression, and clean again
+immediately after a fresh reset. Re-run against a freshly seeded database for a reliable clean result.
 
 **The frontend was fully visually redesigned in a later milestone**, on top of the same backend and the
 same 41 Playwright tests (28 needed no changes at all; a handful were updated to match intentional
@@ -169,6 +188,46 @@ Session 15, for full detail, including the rest of what the audit checked and fo
 
 ## How much time did you actually spend?
 
+Approximately 14–15 hours in total, across the sessions recorded in `docs/plan.md` — somewhat over the
+12-hour size guide, mostly because of the deployment work (Sessions 20–23: the cross-site session-cookie
+bug found only after a real Vercel/Render deploy, the same-origin proxy fix it required, and getting
+password-reset email actually working from Render after SMTP turned out not to be viable there) and the
+account-linking/member-portal milestone, both of which took longer than estimated once real infrastructure
+and real browser verification were involved rather than local `curl`-only checks.
+
 ## What would you do next, with another 12 hours?
 
+First, I'd close the one disclosed concurrency gap that isn't yet held to the same standard as the
+booking path: session/room creation and recurring-schedule generation check for a scheduling conflict and
+then insert, without the row lock the booking flow uses (`bookingTransaction.js`'s `SELECT ... FOR
+UPDATE`) — documented honestly in the code rather than hidden, but two concurrent requests for the same
+overlapping slot could theoretically both pass their own check and both insert. I'd bring that under the
+same locking discipline the booking lifecycle already has, with the same kind of real `Promise.all`
+concurrency test `bookingConcurrency.test.js` already sets the bar for.
+
+Second, I'd verify the email-change and password-change flows session-revocation gap noted in
+`docs/architecture.md`'s "what was deliberately not built": changing a password doesn't currently
+invalidate other active sessions for that account, which is a real, bounded gap for a production app even
+though it's outside the ten mandatory goals.
+
+Third, I'd pick up one of the stretch ideas properly rather than leaving the member portal as the only
+one attempted — waitlist position visibility for members is the most natural next step, since the FIFO
+ordering it would surface already exists server-side and just isn't exposed to the member who's waiting.
+
+Fourth, I'd add a small amount of in-repo Render deployment documentation (the exact build/start command
+and a required-env-var checklist) — right now that knowledge only lives in the Render dashboard itself,
+which isn't something a reviewer (or a future me) can see from the repository alone.
+
 ## What are you least happy with in this codebase, and why?
+
+Documentation drift between the code and `docs/schema.md` — a final read-only audit of this repository
+caught `docs/schema.md` still describing `members.email` as deliberately non-unique and citing migrations
+"001–013," when migration `014` (Decision 47) had already made that email column unique and the migration
+count was already at 14. The change itself was made carefully and is well-tested and well-reasoned in
+`docs/decisions.md` — the gap was purely that updating the schema doc wasn't part of that session's own
+verification checklist, so a real, deliberate design reversal shipped without the one document whose whole
+job is to describe the database accurately. It's fixed now, but it's exactly the failure mode that makes
+documentation quietly stop being trustworthy over a longer-lived project, and I'd want a habit (or a
+lightweight check) that treats "did this migration touch anything `docs/schema.md` claims" as part of
+every migration's own definition of done, not something a separate audit pass has to catch after the
+fact.
