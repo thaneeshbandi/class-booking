@@ -24,7 +24,9 @@ import { authenticate } from '../middleware/authenticate.js';
 import { requireRole } from '../middleware/authorize.js';
 import {
   loadAuthorizedSession,
+  scopeSessionsToCoInstructor,
   scopeSessionsToInstructor,
+  scopeSessionsToPrimaryInstructor,
 } from '../middleware/sessionAccess.js';
 import { idParamSchema } from '../validation/ids.js';
 import { zodErrorResponse } from '../validation/respond.js';
@@ -91,11 +93,19 @@ function serializeBooking(row) {
   };
 }
 
+const isoDateSchema = z.string().regex(/^\d{4}-\d{2}-\d{2}$/, 'must be YYYY-MM-DD.');
+
 const listSessionsQuerySchema = z.object({
   classId: z
     .string()
     .regex(/^[1-9][0-9]*$/, 'classId must be a positive integer.')
     .optional(),
+  dateFrom: isoDateSchema.optional(),
+  dateTo: isoDateSchema.optional(),
+  // Meaningful only for a non-staff (instructor) caller — see the route
+  // below: staff already see every session unscoped, so this has no
+  // effect for them rather than being rejected as an error.
+  role: z.enum(['all', 'primary', 'co']).optional(),
 });
 
 const sessionCreateSchema = z.object({
@@ -136,8 +146,6 @@ const MAX_CANDIDATE_DATES = 500;
 const localTimeSchema = z
   .string()
   .regex(/^([01]\d|2[0-3]):[0-5]\d$/, 'must be a 24-hour HH:MM time.');
-
-const isoDateSchema = z.string().regex(/^\d{4}-\d{2}-\d{2}$/, 'must be YYYY-MM-DD.');
 
 const recurringSessionSchema = z
   .object({
@@ -248,8 +256,41 @@ router.get('/', async (req, res, next) => {
     if (parsedQuery.data.classId) {
       query = query.where('sessions.class_id', parsedQuery.data.classId);
     }
+    if (parsedQuery.data.dateFrom) {
+      // Studio-local midnight on `dateFrom`, resolved to the correct instant
+      // by Postgres's own `AT TIME ZONE` — the same mechanism
+      // `recurringSchedule.js#localTimestampString` and
+      // `routes/memberBookings.js`'s own date filters already use, never a
+      // second, hand-rolled timezone conversion.
+      query = query.where(
+        'sessions.starts_at',
+        '>=',
+        db.raw('(?::date)::timestamp AT TIME ZONE ?', [parsedQuery.data.dateFrom, env.STUDIO_TIMEZONE]),
+      );
+    }
+    if (parsedQuery.data.dateTo) {
+      // Strictly before studio-local midnight the day *after* `dateTo` — an
+      // exclusive upper bound, so `dateTo` itself is fully included.
+      query = query.where(
+        'sessions.starts_at',
+        '<',
+        db.raw('(?::date + 1)::timestamp AT TIME ZONE ?', [parsedQuery.data.dateTo, env.STUDIO_TIMEZONE]),
+      );
+    }
+    // Authorization scope first: applied before `role` narrows *within* it.
+    // `role` only ever affects a non-staff caller's own already-authorized
+    // set — staff already see every session unscoped, so the param has no
+    // effect for them rather than being treated as an error. Nothing here
+    // ever reads an instructor id from the client; `req.user.id` is the only
+    // id every branch below uses.
     if (req.user.role !== 'staff') {
-      query = query.modify(scopeSessionsToInstructor, req.user.id);
+      if (parsedQuery.data.role === 'primary') {
+        query = query.modify(scopeSessionsToPrimaryInstructor, req.user.id);
+      } else if (parsedQuery.data.role === 'co') {
+        query = query.modify(scopeSessionsToCoInstructor, req.user.id);
+      } else {
+        query = query.modify(scopeSessionsToInstructor, req.user.id);
+      }
     }
     const sessions = await query;
     res.json({ sessions: sessions.map(serializeSession) });

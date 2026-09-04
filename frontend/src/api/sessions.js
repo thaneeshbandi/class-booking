@@ -1,6 +1,6 @@
 import { api, downloadResponse } from './client.js';
 
-export const fetchSessions = (classId) => api.get('/api/sessions', classId ? { classId } : undefined);
+export const fetchSessions = (query) => api.get('/api/sessions', query);
 export const fetchSession = (id) => api.get(`/api/sessions/${id}`);
 export const createSession = (body) => api.post('/api/sessions', body);
 export const updateSession = (id, body) => api.patch(`/api/sessions/${id}`, body);

@@ -203,10 +203,22 @@ function SessionForm({ initial, classes, rooms, instructors, onCancel, onSaved }
   );
 }
 
+const ROLE_FILTER_OPTIONS = [
+  { value: '', label: 'All my sessions' },
+  { value: 'primary', label: 'Primary instructor' },
+  { value: 'co', label: 'Co-instructor' },
+];
+
 export function SessionsPage() {
   const { isStaff, isInstructor } = useAuth();
   const [searchParams, setSearchParams] = useSearchParams();
   const classIdFilter = searchParams.get('classId') ?? '';
+  const dateFrom = searchParams.get('dateFrom') ?? '';
+  const dateTo = searchParams.get('dateTo') ?? '';
+  // Meaningful only for an instructor — the backend already ignores it for
+  // a staff caller (they see every session unscoped regardless), and the
+  // control itself is only rendered below for `isInstructor`.
+  const roleFilter = searchParams.get('role') ?? '';
 
   const [sessions, setSessions] = useState(null);
   const [classes, setClasses] = useState([]);
@@ -223,7 +235,7 @@ export function SessionsPage() {
     setLoading(true);
     setError(null);
     Promise.all([
-      fetchSessions(classIdFilter || undefined),
+      fetchSessions({ classId: classIdFilter, dateFrom, dateTo, role: roleFilter }),
       fetchClasses(),
       fetchRooms(),
       isStaff ? fetchInstructors() : Promise.resolve({ users: [] }),
@@ -238,7 +250,16 @@ export function SessionsPage() {
       .finally(() => setLoading(false));
   }
 
-  useEffect(load, [classIdFilter, isStaff]);
+  useEffect(load, [classIdFilter, dateFrom, dateTo, roleFilter, isStaff]);
+
+  function updateFilter(key, value) {
+    const next = new URLSearchParams(searchParams);
+    if (value) next.set(key, value);
+    else next.delete(key);
+    setSearchParams(next);
+  }
+
+  const hasFilters = Boolean(classIdFilter || dateFrom || dateTo || roleFilter);
 
   const classById = Object.fromEntries(classes.map((c) => [c.id, c]));
   const roomById = Object.fromEntries(rooms.map((r) => [r.id, r]));
@@ -296,13 +317,13 @@ export function SessionsPage() {
       <div className="filter-bar">
         <div className="filter-field">
           <label className="form-label" htmlFor="class-filter">
-            Filter by class
+            Class
           </label>
           <select
             id="class-filter"
             className="form-input"
             value={classIdFilter}
-            onChange={(event) => setSearchParams(event.target.value ? { classId: event.target.value } : {})}
+            onChange={(event) => updateFilter('classId', event.target.value)}
           >
             <option value="">All classes</option>
             {classes.map((c) => (
@@ -312,6 +333,55 @@ export function SessionsPage() {
             ))}
           </select>
         </div>
+        <div className="filter-field">
+          <label className="form-label" htmlFor="session-date-from">
+            From
+          </label>
+          <input
+            id="session-date-from"
+            type="date"
+            className="form-input"
+            value={dateFrom}
+            onChange={(event) => updateFilter('dateFrom', event.target.value)}
+          />
+        </div>
+        <div className="filter-field">
+          <label className="form-label" htmlFor="session-date-to">
+            To
+          </label>
+          <input
+            id="session-date-to"
+            type="date"
+            className="form-input"
+            value={dateTo}
+            onChange={(event) => updateFilter('dateTo', event.target.value)}
+          />
+        </div>
+        {isInstructor ? (
+          <div className="filter-field">
+            <label className="form-label" htmlFor="session-role-filter">
+              Role
+            </label>
+            <select
+              id="session-role-filter"
+              className="form-input"
+              value={roleFilter}
+              onChange={(event) => updateFilter('role', event.target.value)}
+            >
+              {ROLE_FILTER_OPTIONS.map((option) => (
+                <option key={option.value} value={option.value}>
+                  {option.label}
+                </option>
+              ))}
+            </select>
+          </div>
+        ) : null}
+        {hasFilters ? (
+          <button type="button" className="btn btn-secondary" onClick={() => setSearchParams({})}>
+            <Icon name="close" size={14} />
+            Clear filters
+          </button>
+        ) : null}
       </div>
 
       {notice ? <div className="state-block state-success">{notice}</div> : null}
@@ -319,7 +389,10 @@ export function SessionsPage() {
       {error ? <ErrorBanner error={error} onRetry={load} /> : null}
       {actionError ? <ErrorBanner error={actionError} /> : null}
       {!loading && !error && sessions?.length === 0 ? (
-        <EmptyState icon="sessions" label="No sessions to show." />
+        <EmptyState
+          icon="sessions"
+          label={hasFilters ? 'No sessions match these filters.' : 'No sessions to show.'}
+        />
       ) : null}
 
       {!loading && !error && sessions?.length > 0 ? (

@@ -1057,3 +1057,63 @@ own framing suspected.
 Nothing was wrong in this session's own output before verification — the regression test was written,
 proven to fail against the real bug, then proven to pass against the fix, in that order, rather than
 trusted on the first try.
+
+## Member "My Bookings" filters, and the instructor Primary/Co-instructor "My Sessions" filter
+
+### Prompt
+
+A follow-on feature request, explicitly building on the just-fixed member booking-state bug and framed
+with hard constraints: don't regress that fix, preserve the existing architecture/authorization/design
+system, extend an existing endpoint rather than add a redundant one, keep all filtering server-side. It
+asked for three filters on member "My Bookings" (status, class, date range), a role filter on instructor
+"My Sessions" distinguishing primary-instructor sessions from co-instructor sessions from the union of
+both — explicit that this must be enforced server-side against the authenticated user's own id, never a
+client-supplied instructor id — plus class/date filters on the same instructor view, consistent filter UX
+across all three member/instructor pages, and an explicit instruction to verify the booking-state fix
+still held after filters were layered on top of it (book two sessions, apply a filter, refresh — both
+must still show Booked).
+
+### What was produced
+
+Inspected `GET /api/member/bookings` and `GET /api/sessions` before writing anything. Extended both in
+place: `GET /api/member/bookings` gained `status`/`classId`/`dateFrom`/`dateTo`, every one ANDed onto the
+existing `bookings.member_id = member.id` scope. `GET /api/sessions` gained `dateFrom`/`dateTo` and
+`role=all|primary|co`, the latter built as two new sibling functions in `sessionAccess.js`
+(`scopeSessionsToPrimaryInstructor`, `scopeSessionsToCoInstructor`) rather than by modifying the existing
+`scopeSessionsToInstructor` that every resource-level authorization check in the app already depends on —
+see `docs/decisions.md`, Decision 45, for why that mattered enough to be its own decision. `role` reads
+only `req.user.id`; there is no code path anywhere in the new query that accepts an instructor id from the
+client, and it has no effect at all for a staff caller. Both new date filters reuse the exact
+studio-timezone `AT TIME ZONE` conversion the previous session's member-session-browsing filters already
+established, not a new mechanism. `MemberBookingsPage.jsx` and `SessionsPage.jsx` both got a
+`useSearchParams` filter bar built to match `MemberSessionsPage.jsx`'s own existing shape exactly (same
+CSS classes, same merge-not-replace filter-update pattern), per the brief's own cross-page-consistency
+ask. Explicitly re-verified the booking-state fix under the new filters, per the brief's own script: booked
+two sessions, applied the class filter, applied "My booked sessions," refreshed — all three Playwright
+tests from the previous session covering exactly this were re-run and stayed green, and this session's own
+class-filter test on the same page repeats the same shape as a second, independent check.
+
+### What was correct
+
+The core design decision — extend two existing endpoints rather than add new ones, and build the role
+filter as two small siblings of the existing authorization predicate rather than changing it — held up
+through implementation with no rework needed; `docs/decisions.md` records why each call was made, not just
+what was built.
+
+### What was wrong, and what was corrected
+
+Two things, both caught by tests before being trusted, neither in the filtering logic itself:
+
+1. **A genuine test-fixture collision, not a product bug**: the first version of the new
+   `tests/sessions.test.js` role-filter tests used `at(600)`/`at(624)`/`at(648)` as session start-time
+   offsets — the same `at(600)` a different, pre-existing test in that same file already used for its own
+   session, producing a real room/instructor scheduling conflict the moment both tests ran in the same
+   suite. Caught immediately by that unrelated pre-existing test failing with a confusing
+   `TypeError: Cannot read properties of undefined (reading 'id')` (the create request had 409'd, not the
+   200 the test assumed) rather than a clean assertion failure — root-caused by reading the actual error,
+   grepping the file for every other `at(N)` offset already in use, and moving the new fixtures to a
+   clearly disjoint window rather than guessing at a fix.
+2. Two Playwright tests (this session's new instructor role-filter test, and an unrelated, untouched
+   recurring-generation test from an earlier milestone) failed once during a full ~90-test suite run and
+   passed cleanly when re-run in isolation immediately after — verified as transient rather than assumed:
+   re-running the *entire* suite twice more, both times clean, before trusting the work as done.

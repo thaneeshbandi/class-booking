@@ -425,6 +425,151 @@ describe('GET /api/sessions — collection scoping with a classId filter', () =>
   });
 });
 
+describe('GET /api/sessions — dateFrom/dateTo and the role filter', () => {
+  it('filters by dateFrom/dateTo using the studio-local calendar day, inclusive on both ends', async () => {
+    const staffCookie = await loginAs(fixture.staff);
+    const { rows } = await db.raw(`SELECT to_char((now() AT TIME ZONE ?), 'YYYY-MM-DD') AS today`, [
+      env.STUDIO_TIMEZONE,
+    ]);
+    const today = rows[0].today;
+    const addDays = (isoDate, days) => {
+      const [y, m, d] = isoDate.split('-').map(Number);
+      return new Date(Date.UTC(y, m - 1, d + days)).toISOString().slice(0, 10);
+    };
+    const atNoon = async (isoDate) => {
+      const { rows: r } = await db.raw(`SELECT ((?::date)::timestamp + interval '12 hours') AT TIME ZONE ? AS ts`, [
+        isoDate,
+        env.STUDIO_TIMEZONE,
+      ]);
+      return r[0].ts;
+    };
+
+    const dayNear = addDays(today, 500);
+    const dayMid = addDays(today, 520);
+    const dayFar = addDays(today, 540);
+
+    const near = await createSession(staffCookie, { startsAt: await atNoon(dayNear) });
+    const mid = await createSession(staffCookie, { startsAt: await atNoon(dayMid) });
+    const far = await createSession(staffCookie, { startsAt: await atNoon(dayFar) });
+    for (const res of [near, mid, far]) createdSessionIds.push(res.json.session.id);
+
+    const res = await server.request({
+      method: 'GET',
+      path: `/api/sessions?dateFrom=${dayMid}&dateTo=${dayMid}`,
+      cookie: staffCookie,
+    });
+    assert.equal(res.status, 200);
+    const ids = res.json.sessions.map((s) => s.id);
+    assert.ok(ids.includes(mid.json.session.id));
+    assert.ok(!ids.includes(near.json.session.id));
+    assert.ok(!ids.includes(far.json.session.id));
+  });
+
+  it('rejects a malformed date filter with 400', async () => {
+    const staffCookie = await loginAs(fixture.staff);
+    const res = await server.request({
+      method: 'GET',
+      path: '/api/sessions?dateFrom=not-a-date',
+      cookie: staffCookie,
+    });
+    assert.equal(res.status, 400);
+  });
+
+  it('role=primary/co/all narrows an instructor’s own already-authorized set, never widening it', async () => {
+    const staffCookie = await loginAs(fixture.staff);
+
+    const primarySession = await createSession(staffCookie, {
+      primaryInstructorId: fixture.instructorA.id,
+      startsAt: at(1200).toISOString(),
+    });
+    const coSession = await createSession(staffCookie, {
+      primaryInstructorId: fixture.instructorB.id,
+      startsAt: at(1224).toISOString(),
+    });
+    const unrelatedSession = await createSession(staffCookie, {
+      primaryInstructorId: fixture.instructorB.id,
+      startsAt: at(1248).toISOString(),
+    });
+    for (const res of [primarySession, coSession, unrelatedSession]) {
+      createdSessionIds.push(res.json.session.id);
+    }
+
+    const addCoRes = await server.request({
+      method: 'POST',
+      path: `/api/sessions/${coSession.json.session.id}/co-instructors`,
+      cookie: staffCookie,
+      body: { instructorId: fixture.instructorA.id },
+    });
+    assert.equal(addCoRes.status, 201, addCoRes.raw);
+
+    const instructorACookie = await loginAs(fixture.instructorA);
+
+    const primaryOnly = await server.request({
+      method: 'GET',
+      path: '/api/sessions?role=primary',
+      cookie: instructorACookie,
+    });
+    assert.equal(primaryOnly.status, 200);
+    const primaryIds = primaryOnly.json.sessions.map((s) => s.id);
+    assert.ok(primaryIds.includes(primarySession.json.session.id));
+    assert.ok(!primaryIds.includes(coSession.json.session.id), 'role=primary excludes a co-instructor session');
+    assert.ok(!primaryIds.includes(unrelatedSession.json.session.id));
+
+    const coOnly = await server.request({
+      method: 'GET',
+      path: '/api/sessions?role=co',
+      cookie: instructorACookie,
+    });
+    assert.equal(coOnly.status, 200);
+    const coIds = coOnly.json.sessions.map((s) => s.id);
+    assert.ok(coIds.includes(coSession.json.session.id));
+    assert.ok(!coIds.includes(primarySession.json.session.id), 'role=co excludes a primary-instructor session');
+    assert.ok(!coIds.includes(unrelatedSession.json.session.id));
+
+    const all = await server.request({
+      method: 'GET',
+      path: '/api/sessions?role=all',
+      cookie: instructorACookie,
+    });
+    assert.equal(all.status, 200);
+    const allIds = all.json.sessions.map((s) => s.id);
+    assert.ok(allIds.includes(primarySession.json.session.id));
+    assert.ok(allIds.includes(coSession.json.session.id));
+    assert.ok(!allIds.includes(unrelatedSession.json.session.id));
+
+    // Omitting role entirely must match role=all exactly — the existing,
+    // unchanged default behavior every other test in this suite relies on.
+    const omitted = await server.request({ method: 'GET', path: '/api/sessions', cookie: instructorACookie });
+    assert.equal(omitted.status, 200);
+    const omittedIds = omitted.json.sessions.map((s) => s.id);
+    assert.deepEqual(new Set(omittedIds), new Set(allIds));
+  });
+
+  it('the role filter has no effect for a staff caller — staff still see every session', async () => {
+    const staffCookie = await loginAs(fixture.staff);
+    const created = await createSession(staffCookie, { startsAt: at(1300).toISOString() });
+    createdSessionIds.push(created.json.session.id);
+
+    const res = await server.request({
+      method: 'GET',
+      path: '/api/sessions?role=primary',
+      cookie: staffCookie,
+    });
+    assert.equal(res.status, 200);
+    assert.ok(res.json.sessions.some((s) => s.id === created.json.session.id));
+  });
+
+  it('rejects an invalid role value with 400', async () => {
+    const staffCookie = await loginAs(fixture.staff);
+    const res = await server.request({
+      method: 'GET',
+      path: '/api/sessions?role=owner',
+      cookie: staffCookie,
+    });
+    assert.equal(res.status, 400);
+  });
+});
+
 describe('GET /api/sessions — bookedCount', () => {
   async function insertMember() {
     const [member] = await db('members')

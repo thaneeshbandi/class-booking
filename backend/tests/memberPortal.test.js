@@ -439,6 +439,219 @@ describe('GET /api/member/bookings', () => {
     assert.equal(resB.status, 200);
     assert.equal(resB.json.bookings.length, 0, 'member B sees none of member A’s bookings');
   });
+
+  it('filters by status', async () => {
+    const sessionBooked = await createRawSession({ capacity: 5 });
+    const sessionCancelled = await createRawSession({ capacity: 5 });
+    const { cookie, userId } = await signupMember('Status Filter Member');
+    await grantMembership(userId, '2099-01-01');
+
+    const kept = await server.request({
+      method: 'POST',
+      path: '/api/member/bookings',
+      cookie,
+      body: { sessionId: sessionBooked.id },
+    });
+    const toCancel = await server.request({
+      method: 'POST',
+      path: '/api/member/bookings',
+      cookie,
+      body: { sessionId: sessionCancelled.id },
+    });
+    await server.request({
+      method: 'POST',
+      path: `/api/member/bookings/${toCancel.json.booking.id}/cancel`,
+      cookie,
+    });
+
+    const bookedRes = await server.request({ method: 'GET', path: '/api/member/bookings?status=booked', cookie });
+    const bookedIds = bookedRes.json.bookings.map((b) => String(b.id));
+    assert.ok(bookedIds.includes(String(kept.json.booking.id)));
+    assert.ok(!bookedIds.includes(String(toCancel.json.booking.id)));
+
+    const cancelledRes = await server.request({
+      method: 'GET',
+      path: '/api/member/bookings?status=cancelled',
+      cookie,
+    });
+    const cancelledIds = cancelledRes.json.bookings.map((b) => String(b.id));
+    assert.ok(cancelledIds.includes(String(toCancel.json.booking.id)));
+    assert.ok(!cancelledIds.includes(String(kept.json.booking.id)));
+  });
+
+  it('filters by classId', async () => {
+    const [otherClass] = await db('classes')
+      .insert({
+        title: `Member Bookings Other Class ${RUN}`,
+        discipline: 'Testing',
+        default_duration_minutes: 45,
+        default_capacity: 3,
+      })
+      .returning('*');
+    const [otherRoom] = await db('rooms').insert({ name: `Member Bookings Other Room ${RUN}` }).returning('*');
+    const [otherClassSession] = await db('sessions')
+      .insert({
+        class_id: otherClass.id,
+        primary_instructor_id: fixture.instructor.id,
+        room_id: otherRoom.id,
+        starts_at: new Date(Date.now() + 24 * 3_600_000),
+        duration_minutes: 45,
+        capacity: 3,
+      })
+      .returning('*');
+
+    const inClassSession = await createRawSession({ capacity: 5 });
+    const { cookie, userId } = await signupMember('Class Filter Bookings Member');
+    await grantMembership(userId, '2099-01-01');
+
+    const inClassBooking = await server.request({
+      method: 'POST',
+      path: '/api/member/bookings',
+      cookie,
+      body: { sessionId: inClassSession.id },
+    });
+    const otherClassBooking = await server.request({
+      method: 'POST',
+      path: '/api/member/bookings',
+      cookie,
+      body: { sessionId: otherClassSession.id },
+    });
+
+    const res = await server.request({
+      method: 'GET',
+      path: `/api/member/bookings?classId=${fixture.class.id}`,
+      cookie,
+    });
+    const ids = res.json.bookings.map((b) => String(b.id));
+    assert.ok(ids.includes(String(inClassBooking.json.booking.id)));
+    assert.ok(!ids.includes(String(otherClassBooking.json.booking.id)));
+  });
+
+  it('filters by dateFrom/dateTo using the studio-local calendar day, inclusive on both ends', async () => {
+    const { rows } = await db.raw(`SELECT to_char((now() AT TIME ZONE ?), 'YYYY-MM-DD') AS today`, [
+      env.STUDIO_TIMEZONE,
+    ]);
+    const today = rows[0].today;
+    const addDays = (isoDate, days) => {
+      const [y, m, d] = isoDate.split('-').map(Number);
+      return new Date(Date.UTC(y, m - 1, d + days)).toISOString().slice(0, 10);
+    };
+    const atNoon = async (isoDate) => {
+      const { rows: r } = await db.raw(`SELECT ((?::date)::timestamp + interval '12 hours') AT TIME ZONE ? AS ts`, [
+        isoDate,
+        env.STUDIO_TIMEZONE,
+      ]);
+      return r[0].ts;
+    };
+
+    const dayNear = addDays(today, 560);
+    const dayMid = addDays(today, 580);
+    const dayFar = addDays(today, 600);
+
+    const sessionNear = await createRawSession({ capacity: 5, startsAt: await atNoon(dayNear) });
+    const sessionMid = await createRawSession({ capacity: 5, startsAt: await atNoon(dayMid) });
+    const sessionFar = await createRawSession({ capacity: 5, startsAt: await atNoon(dayFar) });
+
+    const { cookie, userId } = await signupMember('Date Filter Bookings Member');
+    await grantMembership(userId, '2099-01-01');
+    const bookingNear = await server.request({
+      method: 'POST',
+      path: '/api/member/bookings',
+      cookie,
+      body: { sessionId: sessionNear.id },
+    });
+    const bookingMid = await server.request({
+      method: 'POST',
+      path: '/api/member/bookings',
+      cookie,
+      body: { sessionId: sessionMid.id },
+    });
+    const bookingFar = await server.request({
+      method: 'POST',
+      path: '/api/member/bookings',
+      cookie,
+      body: { sessionId: sessionFar.id },
+    });
+
+    const res = await server.request({
+      method: 'GET',
+      path: `/api/member/bookings?dateFrom=${dayMid}&dateTo=${dayMid}`,
+      cookie,
+    });
+    const ids = res.json.bookings.map((b) => String(b.id));
+    assert.ok(ids.includes(String(bookingMid.json.booking.id)));
+    assert.ok(!ids.includes(String(bookingNear.json.booking.id)));
+    assert.ok(!ids.includes(String(bookingFar.json.booking.id)));
+  });
+
+  it('combines status, classId, and date filters with AND semantics', async () => {
+    const session = await createRawSession({ capacity: 5 });
+    const { cookie, userId } = await signupMember('Combined Filter Member');
+    await grantMembership(userId, '2099-01-01');
+    const created = await server.request({
+      method: 'POST',
+      path: '/api/member/bookings',
+      cookie,
+      body: { sessionId: session.id },
+    });
+
+    const matches = await server.request({
+      method: 'GET',
+      path: `/api/member/bookings?status=booked&classId=${fixture.class.id}`,
+      cookie,
+    });
+    assert.ok(matches.json.bookings.some((b) => String(b.id) === String(created.json.booking.id)));
+
+    // A status that does not apply to this booking excludes it, even though
+    // the class filter alone would have matched.
+    const excluded = await server.request({
+      method: 'GET',
+      path: `/api/member/bookings?status=cancelled&classId=${fixture.class.id}`,
+      cookie,
+    });
+    assert.ok(!excluded.json.bookings.some((b) => String(b.id) === String(created.json.booking.id)));
+  });
+
+  it('rejects an invalid status value and a malformed date with 400', async () => {
+    const { cookie } = await signupMember('Bad Filter Bookings Member');
+    const badStatus = await server.request({
+      method: 'GET',
+      path: '/api/member/bookings?status=not-a-status',
+      cookie,
+    });
+    assert.equal(badStatus.status, 400);
+
+    const badDate = await server.request({
+      method: 'GET',
+      path: '/api/member/bookings?dateFrom=not-a-date',
+      cookie,
+    });
+    assert.equal(badDate.status, 400);
+  });
+
+  it('a client-supplied classId/status filter can never surface another member’s bookings', async () => {
+    const session = await createRawSession({ capacity: 5 });
+    const a = await signupMember('Filter Isolation A');
+    await grantMembership(a.userId, '2099-01-01');
+    const b = await signupMember('Filter Isolation B');
+    const bookRes = await server.request({
+      method: 'POST',
+      path: '/api/member/bookings',
+      cookie: a.cookie,
+      body: { sessionId: session.id },
+    });
+    assert.equal(bookRes.status, 201, 'member A’s own booking must actually succeed for this test to mean anything');
+
+    // Member B applies the broadest possible filter (matches everything
+    // about this session/class) but is still scoped to their own, empty set.
+    const res = await server.request({
+      method: 'GET',
+      path: `/api/member/bookings?classId=${fixture.class.id}`,
+      cookie: b.cookie,
+    });
+    assert.equal(res.status, 200);
+    assert.equal(res.json.bookings.length, 0);
+  });
 });
 
 describe('POST /api/member/bookings/:id/cancel', () => {

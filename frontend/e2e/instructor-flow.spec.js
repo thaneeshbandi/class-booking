@@ -10,6 +10,7 @@ import {
   login,
   logout,
   randomFutureDayOffset,
+  uniqueLabel,
 } from './fixtures.js';
 
 function toDatetimeLocalValue(daysFromNow, hour) {
@@ -171,5 +172,131 @@ test.describe.serial('instructor — authorization boundaries', () => {
       allowedResponses: [{ urlIncludes: `/api/sessions/${foreignSessionId}`, status: 403 }],
       allowExpectedAuthFailures: true,
     });
+  });
+});
+
+// Regression/feature coverage for the instructor "My Sessions" role/class/
+// date filters — `role=primary|co|all` is enforced server-side against the
+// authenticated instructor's own id (see `sessionAccess.js`); this suite
+// proves the UI drives that correctly and never surfaces a session the
+// instructor has no relationship to, in any filter combination.
+test.describe.serial('instructor — My Sessions role/class/date filters', () => {
+  let page;
+  const className = uniqueLabel('Role Filter Class');
+  const primaryDayOffset = randomFutureDayOffset(2000, 700);
+  const coDayOffset = randomFutureDayOffset(2000, 3000);
+  const unrelatedDayOffset = randomFutureDayOffset(2000, 5000);
+
+  test.beforeAll(async ({ browser }) => {
+    const staffPage = await browser.newPage();
+    await login(staffPage, STAFF);
+
+    // A dedicated class so this suite's own sessions can be found by exact
+    // text match, never confused with any other spec file's own fixtures
+    // in the same shared database.
+    await staffPage.goto('/classes');
+    await staffPage.getByRole('button', { name: 'Create class' }).click();
+    const classDialog = staffPage.getByRole('dialog');
+    await classDialog.getByLabel('Title').fill(className);
+    await classDialog.getByLabel('Discipline').fill('Role Filter Testing');
+    await classDialog.getByLabel('Default duration (minutes)').fill('45');
+    await classDialog.getByLabel('Default capacity').fill('5');
+    await classDialog.getByRole('button', { name: 'Create class', exact: true }).click();
+    await expect(classDialog).not.toBeVisible();
+
+    async function createRoleFilterSession(instructorFullName, dayOffset) {
+      await staffPage.goto('/sessions');
+      await staffPage.getByRole('button', { name: 'Create session' }).click();
+      const dialog = staffPage.getByRole('dialog');
+      await dialog.getByLabel('Class', { exact: true }).selectOption({ label: className });
+      await dialog.getByLabel('Primary instructor').selectOption({ label: instructorFullName });
+      await dialog.getByLabel('Room').selectOption({ label: SEED_ROOM_NAME });
+      const [response] = await Promise.all([
+        staffPage.waitForResponse((res) => res.request().method() === 'POST' && res.url().endsWith('/api/sessions')),
+        (async () => {
+          await dialog.getByLabel('Starts at (your local time)').fill(toDatetimeLocalValue(dayOffset, 9));
+          await dialog.getByRole('button', { name: 'Create session', exact: true }).click();
+        })(),
+      ]);
+      await expect(dialog).not.toBeVisible();
+      const body = await response.json();
+      return String(body.session.id);
+    }
+
+    await createRoleFilterSession(INSTRUCTOR.fullName, primaryDayOffset);
+    const coSessionId = await createRoleFilterSession(SECOND_INSTRUCTOR.fullName, coDayOffset);
+    await createRoleFilterSession(SECOND_INSTRUCTOR.fullName, unrelatedDayOffset);
+
+    // Add INSTRUCTOR as a co-instructor on the second session, through the
+    // real UI — the same flow `staff-flow.spec.js`'s own co-instructor test
+    // already exercises.
+    await staffPage.goto(`/sessions/${coSessionId}`);
+    await staffPage.getByText('No co-instructors assigned.').waitFor();
+    const addForm = staffPage.locator('form.inline-form').filter({ hasText: 'co-instructor' });
+    await addForm.locator('select').selectOption({ label: INSTRUCTOR.fullName });
+    await addForm.getByRole('button', { name: 'Add' }).click();
+    await expect(staffPage.locator('.plain-list li', { hasText: INSTRUCTOR.fullName })).toBeVisible();
+
+    await staffPage.close();
+
+    page = await browser.newPage();
+    await login(page, INSTRUCTOR);
+  });
+
+  test.afterAll(async () => {
+    await page.close();
+  });
+
+  test('"All my sessions" (the default) shows the primary and co-instructor sessions, never the unrelated one', async () => {
+    await page.goto('/sessions');
+    const rows = page.locator('table.table tbody tr').filter({ hasText: className });
+    await expect(rows).toHaveCount(2);
+  });
+
+  test('the Primary instructor filter shows only the session where I am primary', async () => {
+    await page.getByLabel('Role').selectOption({ label: 'Primary instructor' });
+    await expect(page).toHaveURL(/role=primary/);
+    const rows = page.locator('table.table tbody tr').filter({ hasText: className });
+    await expect(rows).toHaveCount(1);
+  });
+
+  test('the Co-instructor filter shows only the session where I am a co-instructor', async () => {
+    await page.getByLabel('Role').selectOption({ label: 'Co-instructor' });
+    await expect(page).toHaveURL(/role=co/);
+    const rows = page.locator('table.table tbody tr').filter({ hasText: className });
+    await expect(rows).toHaveCount(1);
+  });
+
+  test('the class filter combines with the role filter', async () => {
+    await page.getByLabel('Role').selectOption({ label: 'All my sessions' });
+    await page.getByLabel('Class').selectOption({ label: className });
+    await expect(page).toHaveURL(/classId=/);
+    const rows = page.locator('table.table tbody tr').filter({ hasText: className });
+    await expect(rows).toHaveCount(2);
+  });
+
+  test('a date range wide enough to cover everything still shows both, and one that excludes the future shows none', async () => {
+    const farPast = '2000-01-01';
+    const yesterday = new Date(Date.now() - 86_400_000).toISOString().slice(0, 10);
+    const farFuture = new Date(Date.now() + 20 * 365 * 86_400_000).toISOString().slice(0, 10);
+
+    await page.getByLabel('From').fill(farPast);
+    await page.getByLabel('To').fill(farFuture);
+    let rows = page.locator('table.table tbody tr').filter({ hasText: className });
+    await expect(rows).toHaveCount(2);
+
+    // A range that ends yesterday can never include a future-scheduled
+    // session — proving the date filter has a genuine effect, not just
+    // that the control exists.
+    await page.getByLabel('To').fill(yesterday);
+    rows = page.locator('table.table tbody tr').filter({ hasText: className });
+    await expect(rows).toHaveCount(0);
+  });
+
+  test('clearing filters restores the full authorized set', async () => {
+    await page.getByRole('button', { name: 'Clear filters' }).click();
+    await expect(page).not.toHaveURL(/role=|classId=|dateFrom=|dateTo=/);
+    const rows = page.locator('table.table tbody tr').filter({ hasText: className });
+    await expect(rows).toHaveCount(2);
   });
 });

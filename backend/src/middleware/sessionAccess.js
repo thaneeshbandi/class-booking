@@ -19,6 +19,30 @@ export function scopeSessionsToInstructor(query, instructorId) {
   });
 }
 
+/**
+ * The two halves `scopeSessionsToInstructor` unions together, exposed
+ * separately for the "My Sessions" role filter (`GET /api/sessions?role=
+ * primary|co`) — an instructor narrowing *within* their own already-
+ * authorized set, never widening it. Both still read `instructorId` from
+ * the server-authenticated caller only; nothing here accepts one from the
+ * client. The co-instructor half reuses the exact same `EXISTS` subquery
+ * shape `scopeSessionsToInstructor` already uses, so "am I a co-instructor
+ * on this session" can never quietly drift into two different definitions
+ * depending on which of the three functions asked.
+ */
+export function scopeSessionsToPrimaryInstructor(query, instructorId) {
+  return query.where('sessions.primary_instructor_id', instructorId);
+}
+
+export function scopeSessionsToCoInstructor(query, instructorId) {
+  return query.whereExists(
+    db('session_co_instructors')
+      .select(1)
+      .whereRaw('session_co_instructors.session_id = sessions.id')
+      .andWhere('session_co_instructors.user_id', instructorId),
+  );
+}
+
 function isPositiveIntegerString(value) {
   return typeof value === 'string' && /^[1-9][0-9]*$/.test(value);
 }

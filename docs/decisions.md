@@ -707,3 +707,48 @@ backend/src/domain/sessionConflicts.js`), not invented for this file.
   booking response is merged in. The in-flight `Set` mirrors the same principle for the one piece of
   state that must stay client-side (which button is mid-request): keyed by session id, not a shared flag,
   so two cards can never be confused with each other while both are submitting.
+
+## Decision 45
+
+- **Chose:** The instructor "My Sessions" role filter (`GET /api/sessions?role=all|primary|co`) is built
+  as two new, narrower query-scoping functions — `scopeSessionsToPrimaryInstructor`,
+  `scopeSessionsToCoInstructor` — added alongside the existing `scopeSessionsToInstructor` in
+  `sessionAccess.js`, rather than by changing that function or adding a fourth, standalone predicate. The
+  co-instructor half reuses the exact same `EXISTS (session_co_instructors ...)` subquery shape the
+  existing function already builds its own "OR co-instructor" half from. `role` only ever narrows a
+  non-staff caller's own already-authorized set (`req.user.id` only, never a client-supplied instructor
+  id) and has no effect at all for a staff caller, who already sees every session unscoped.
+- **Rejected:** Changing `scopeSessionsToInstructor` itself to accept a mode parameter; accepting an
+  `instructorId` query parameter and checking it against the caller's own id; filtering the already-
+  fetched session list in the browser by comparing `primaryInstructorId`/`coInstructors` client-side.
+- **Why:** `scopeSessionsToInstructor` is the one place `docs/architecture.md` already documents as
+  binding a resource-level authorization check (`loadAuthorizedSession`, `loadAuthorizedBooking`) and a
+  collection-scoping filter (`GET /api/sessions`, `GET /api/bookings`) to the identical definition of
+  "this instructor's own session" — changing its own behavior for a single new filter risked exactly the
+  drift that shared function exists to prevent. Two small siblings, built from the same subquery shape,
+  add the narrower views without touching what already works. Accepting an `instructorId` param instead
+  of `req.user.id` would have re-opened the exact IDOR shape this codebase has consistently refused
+  everywhere else (see the identical reasoning behind never accepting a client-supplied `member_id`);
+  there is never a legitimate reason for this endpoint to answer "what does instructor X see," only "what
+  do I see." Filtering client-side was ruled out for the same reason `GET /api/bookings`'s own
+  server-side design already documents: it would mean fetching every session the browser cares to keep
+  regardless of the filter, silently reintroducing the "load everything, filter in React" antipattern this
+  project has avoided everywhere the brief's own goals touch server-side filtering.
+
+## Decision 46
+
+- **Chose:** `GET /api/member/bookings` gained `status`/`classId`/`dateFrom`/`dateTo` query filters on the
+  existing endpoint, all applied as additional `WHERE` clauses ANDed onto the caller's own
+  `bookings.member_id = member.id` scope — the same extension shape (and the same studio-timezone
+  `AT TIME ZONE` date-boundary mechanism) already used for `GET /api/member/sessions` and
+  `GET /api/sessions`'s own new filters.
+- **Rejected:** A second, dedicated "search my bookings" endpoint; fetching every booking once and
+  filtering it in the browser.
+- **Why:** Consistent with this milestone's own instruction not to add a redundant endpoint where an
+  existing one can be extended cleanly, and with the project's standing rule that anything filtering a
+  list the brief (or, here, the user) asks to be server-side stays server-side — a member's own booking
+  history could in principle grow large over a real membership's lifetime, the same "don't load everything
+  and filter client-side" reasoning goal 6's own search endpoint was built around. Because every new filter
+  is ANDed onto ownership rather than replacing or widening it, a member can construct no query — however
+  broad the filter values — that returns another member's booking; `tests/memberPortal.test.js` proves
+  this directly rather than leaving it as an inference from the code's shape.

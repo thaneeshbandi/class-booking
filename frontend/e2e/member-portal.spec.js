@@ -413,3 +413,132 @@ test.describe.serial('member session browsing — per-session booking state and 
     await expect(bookableCards).toHaveCount(1);
   });
 });
+
+// My Bookings status/class/date filters — all server-side (see
+// `routes/memberBookings.js`'s `GET /bookings` query contract), always
+// additionally scoped to the caller's own member id regardless of filter
+// values.
+test.describe.serial('member My Bookings — status/class/date filters', () => {
+  let page;
+  const memberEmail = `my-bookings-filter-${Date.now()}@example.com`;
+  const classNameA = uniqueLabel('My Bookings Filter Class A');
+  const classNameB = uniqueLabel('My Bookings Filter Class B');
+
+  test.beforeAll(async ({ browser }) => {
+    const staffPage = await browser.newPage();
+    await login(staffPage, STAFF);
+
+    await staffPage.getByRole('link', { name: 'Members' }).click();
+    await staffPage.getByRole('button', { name: 'Add member' }).click();
+    const memberDialog = staffPage.getByRole('dialog');
+    await memberDialog.getByLabel('Full name').fill('My Bookings Filter Member');
+    await memberDialog.getByLabel('Email').fill(memberEmail);
+    await memberDialog.getByLabel('Membership expires on').fill(isoDate(180));
+    await memberDialog.getByRole('button', { name: 'Add member', exact: true }).click();
+    await expect(memberDialog).not.toBeVisible();
+
+    async function createClassAndSession(className, dayOffset) {
+      await staffPage.getByRole('link', { name: 'Classes' }).click();
+      await staffPage.getByRole('button', { name: 'Create class' }).click();
+      const classDialog = staffPage.getByRole('dialog');
+      await classDialog.getByLabel('Title').fill(className);
+      await classDialog.getByLabel('Discipline').fill('My Bookings Filter Testing');
+      await classDialog.getByLabel('Default duration (minutes)').fill('45');
+      await classDialog.getByLabel('Default capacity').fill('5');
+      await classDialog.getByRole('button', { name: 'Create class', exact: true }).click();
+      await expect(classDialog).not.toBeVisible();
+
+      await staffPage.getByRole('link', { name: 'Sessions', exact: true }).click();
+      await staffPage.getByRole('button', { name: 'Create session' }).click();
+      const sessionDialog = staffPage.getByRole('dialog');
+      await sessionDialog.getByLabel('Class', { exact: true }).selectOption({ label: className });
+      await sessionDialog.getByLabel('Primary instructor').selectOption({ label: INSTRUCTOR.fullName });
+      await sessionDialog.getByLabel('Room').selectOption({ label: SEED_ROOM_NAME });
+      await sessionDialog.getByLabel('Starts at (your local time)').fill(toDatetimeLocalValue(dayOffset));
+      await sessionDialog.getByRole('button', { name: 'Create session', exact: true }).click();
+      await expect(sessionDialog).not.toBeVisible();
+    }
+
+    await createClassAndSession(classNameA, randomFutureDayOffset(2000, 700));
+    await createClassAndSession(classNameB, randomFutureDayOffset(2000, 3000));
+    await staffPage.close();
+
+    page = await browser.newPage();
+    await signup(page, { fullName: 'My Bookings Filter Signup', email: memberEmail });
+
+    await page.goto('/member/sessions');
+    await page.waitForSelector('.member-session-card');
+    const cardA = page.locator('.member-session-card').filter({ hasText: classNameA });
+    await cardA.getByRole('button', { name: /^book$/i }).click();
+    await expect(cardA.getByText('Booked', { exact: true })).toBeVisible();
+    const cardB = page.locator('.member-session-card').filter({ hasText: classNameB });
+    await cardB.getByRole('button', { name: /^book$/i }).click();
+    await expect(cardB.getByText('Booked', { exact: true })).toBeVisible();
+  });
+
+  test.afterAll(async () => {
+    await page.close();
+  });
+
+  test('My Bookings shows all own bookings by default', async () => {
+    await page.goto('/member/bookings');
+    const rows = page.locator('table.table tbody tr');
+    await expect(rows.filter({ hasText: classNameA })).toHaveCount(1);
+    await expect(rows.filter({ hasText: classNameB })).toHaveCount(1);
+  });
+
+  test('the status filter narrows correctly after one booking is cancelled', async () => {
+    const rowA = page.locator('table.table tbody tr').filter({ hasText: classNameA });
+    await rowA.getByRole('button', { name: 'Cancel' }).click();
+    await page.getByRole('dialog').getByRole('button', { name: /cancel booking/i }).click();
+    await expect(rowA.getByText('Cancelled', { exact: true })).toBeVisible();
+
+    await page.getByLabel('Status').selectOption({ label: 'Cancelled' });
+    await expect(page).toHaveURL(/status=cancelled/);
+    let rows = page.locator('table.table tbody tr');
+    await expect(rows.filter({ hasText: classNameA })).toHaveCount(1);
+    await expect(rows.filter({ hasText: classNameB })).toHaveCount(0);
+
+    await page.getByLabel('Status').selectOption({ label: 'Booked' });
+    rows = page.locator('table.table tbody tr');
+    await expect(rows.filter({ hasText: classNameA })).toHaveCount(0);
+    await expect(rows.filter({ hasText: classNameB })).toHaveCount(1);
+
+    await page.locator('.filter-bar').getByRole('button', { name: 'Clear filters' }).click();
+  });
+
+  test('the class filter narrows to one class', async () => {
+    await page.getByLabel('Class').selectOption({ label: classNameB });
+    await expect(page).toHaveURL(/classId=/);
+    const rows = page.locator('table.table tbody tr');
+    await expect(rows.filter({ hasText: classNameB })).toHaveCount(1);
+    await expect(rows.filter({ hasText: classNameA })).toHaveCount(0);
+    await page.locator('.filter-bar').getByRole('button', { name: 'Clear filters' }).click();
+  });
+
+  test('a date range wide enough to cover everything still shows both, and one that excludes the future shows none', async () => {
+    const farPast = '2000-01-01';
+    const yesterday = new Date(Date.now() - 86_400_000).toISOString().slice(0, 10);
+    const farFuture = new Date(Date.now() + 20 * 365 * 86_400_000).toISOString().slice(0, 10);
+
+    await page.getByLabel('From').fill(farPast);
+    await page.getByLabel('To').fill(farFuture);
+    let rows = page.locator('table.table tbody tr');
+    await expect(rows.filter({ hasText: classNameA })).toHaveCount(1);
+    await expect(rows.filter({ hasText: classNameB })).toHaveCount(1);
+
+    await page.getByLabel('To').fill(yesterday);
+    rows = page.locator('table.table tbody tr');
+    await expect(rows.filter({ hasText: classNameA })).toHaveCount(0);
+    await expect(rows.filter({ hasText: classNameB })).toHaveCount(0);
+
+    await page.locator('.filter-bar').getByRole('button', { name: 'Clear filters' }).click();
+  });
+
+  test('an impossible filter shows "no bookings match these filters" — distinct from "no bookings at all"', async () => {
+    await page.getByLabel('Status').selectOption({ label: 'No show' });
+    await expect(page.getByText('No bookings match these filters.')).toBeVisible();
+    await expect(page.getByText("You haven't booked any sessions yet.")).toHaveCount(0);
+    await page.locator('.filter-bar').getByRole('button', { name: 'Clear filters' }).click();
+  });
+});

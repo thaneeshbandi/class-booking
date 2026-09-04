@@ -8,6 +8,7 @@ import {
   createBookingInTransaction,
   translateBookingPgError,
 } from '../domain/bookingTransaction.js';
+import { BOOKING_STATUSES } from './bookings.js';
 import { env } from '../config/env.js';
 import { db } from '../db/knex.js';
 import { authenticate } from '../middleware/authenticate.js';
@@ -226,14 +227,55 @@ function memberBookingQuery() {
     );
 }
 
+const listMemberBookingsQuerySchema = z.object({
+  status: z.enum(BOOKING_STATUSES).optional(),
+  classId: idParamSchema.optional(),
+  dateFrom: isoDateSchema.optional(),
+  dateTo: isoDateSchema.optional(),
+});
+
 router.get('/bookings', async (req, res, next) => {
   try {
+    const parsed = listMemberBookingsQuerySchema.safeParse(req.query);
+    if (!parsed.success) {
+      return res.status(400).json(zodErrorResponse(parsed.error));
+    }
+    const { status, classId, dateFrom, dateTo } = parsed.data;
+
     const member = await requireOwnMember(req, res);
     if (!member) return;
 
-    const rows = await memberBookingQuery()
-      .where('bookings.member_id', member.id)
-      .orderBy('sessions.starts_at', 'desc');
+    // Ownership (`bookings.member_id = member.id`) is applied before any of
+    // the optional filters below and every one of them is ANDed onto it —
+    // none can widen the result past the caller's own bookings, only narrow
+    // it further.
+    let query = memberBookingQuery().where('bookings.member_id', member.id);
+    if (status) {
+      query = query.where('bookings.status', status);
+    }
+    if (classId) {
+      query = query.where('classes.id', classId);
+    }
+    if (dateFrom) {
+      // Studio-local midnight on `dateFrom`, resolved to the correct instant
+      // by Postgres's own `AT TIME ZONE` — the same mechanism
+      // `routes/sessions.js` and `routes/memberBookings.js`'s own
+      // `GET /sessions` date filters already use.
+      query = query.where(
+        'sessions.starts_at',
+        '>=',
+        db.raw('(?::date)::timestamp AT TIME ZONE ?', [dateFrom, env.STUDIO_TIMEZONE]),
+      );
+    }
+    if (dateTo) {
+      query = query.where(
+        'sessions.starts_at',
+        '<',
+        db.raw('(?::date + 1)::timestamp AT TIME ZONE ?', [dateTo, env.STUDIO_TIMEZONE]),
+      );
+    }
+
+    const rows = await query.orderBy('sessions.starts_at', 'desc');
     // `membership` rides along on this response rather than getting its own
     // endpoint: the member row is already loaded here (`requireOwnMember`),
     // and the member home page is the only place this value is shown

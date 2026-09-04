@@ -22,7 +22,8 @@ happened, not a retrofit.
 | 13 | 2026-09-03 | Account/member linking (migration 012), a member portal (browse/book/cancel, reusing the existing booking domain logic), a profile page for every role, forgot-password by email OTP (migration 013), and a reusable error-presentation system replacing raw `{status}: {message}` everywhere; this documentation update. |
 | 14 | 2026-09-03 | A frontend-only correction: fixed a real Bookings table structural bug (a missing `<td>` shifted every cell one column left of its header), a small table/button polish pass, a full table-structure audit across the app, one duplicate-CSS leftover removed, a new Playwright regression test, and real screenshot-based visual QA; this documentation update. |
 | 15 | 2026-09-03 | Final submission audit against `README.md` directly — one genuine gap found and fixed (CSV/formula injection in the attendance export, `domain/csv.js`); everything else audited already matched the brief with a real passing test; this documentation update. |
-| 16 (this one) | 2026-09-04 | Fixed a real member session-browsing bug (a shared `justBookedId` scalar let booking one session silently revert another's displayed state) at both the API layer (`GET /api/member/sessions` now reports each session's own `myBooking`) and the frontend (state derived per-session, never a shared flag), and added class/date/availability filters to the same endpoint; this documentation update. |
+| 16 | 2026-09-04 | Fixed a real member session-browsing bug (a shared `justBookedId` scalar let booking one session silently revert another's displayed state) at both the API layer (`GET /api/member/sessions` now reports each session's own `myBooking`) and the frontend (state derived per-session, never a shared flag), and added class/date/availability filters to the same endpoint; this documentation update. |
+| 17 (this one) | 2026-09-04 | Added status/class/date filters to member "My Bookings" (`GET /api/member/bookings`) and a role (primary/co-instructor/all)/class/date filter to instructor "My Sessions" (`GET /api/sessions`), all server-side and authorization-scoped to the authenticated caller's own id; this documentation update. |
 
 Session 2's five foundation commits share one timestamp to the minute in `git log`, which is a real
 gap in this record: they clearly did not all land in the same sixty seconds, and no finer-grained
@@ -791,6 +792,53 @@ after booking session B — before restoring the fix and confirming the same tes
 Backend `npm test --test-concurrency=1` — 457 tests, 456 passing, 1 skipped (unchanged shape) — and
 `npm run lint`, clean. Frontend `npm run lint` and `npm run build`, clean. The full Playwright suite, 70
 tests (64 before this session plus 6 new), run twice consecutively, both times clean.
+
+## Session 17 — member "My Bookings" filters, instructor "My Sessions" role filter
+
+A follow-on feature request, explicitly scoped: preserve the previous session's member booking-state fix,
+preserve every existing staff/instructor authorization boundary, extend existing endpoints rather than add
+redundant ones, and keep every filter server-side. Inspected `GET /api/member/bookings` and `GET
+/api/sessions` before changing either.
+
+Added `status`/`classId`/`dateFrom`/`dateTo` to `GET /api/member/bookings` (all ANDed onto the caller's
+own `member_id`, never able to widen past it) and `dateFrom`/`dateTo`/`role` to `GET /api/sessions`. The
+`role` filter (`all`/`primary`/`co`) needed two new query-scoping functions,
+`scopeSessionsToPrimaryInstructor` and `scopeSessionsToCoInstructor`, added alongside — not in place of —
+the existing `scopeSessionsToInstructor` in `sessionAccess.js`, so the one shared definition of "this
+instructor's own session" that every resource-level authorization check in the app already depends on
+stayed completely unchanged (see `docs/decisions.md`, Decision 45). `role` only ever narrows a non-staff
+caller's own already-authorized set — `req.user.id` only, never a client-supplied instructor id — and has
+no effect for staff. Every date-range filter reuses the exact same studio-timezone `AT TIME ZONE`
+conversion the member session-browsing filters established in the previous session, not a new mechanism.
+
+On the frontend, `MemberBookingsPage.jsx` and `SessionsPage.jsx` both gained a `useSearchParams`-backed
+filter bar matching `MemberSessionsPage.jsx`'s own established shape (the same `filter-field`/`filter-bar`
+classes, the same merge-not-replace `updateFilter` pattern, the same conditional "Clear filters" button) —
+section 5 of the brief asked for consistency across all three pages, so the third was brought in line with
+the first two's own shape rather than each inventing its own. The Role filter on Sessions is rendered only
+for `isInstructor`, never for staff, matching the backend's own no-op-for-staff behavior. The My Bookings
+empty state distinguishes "no bookings exist" from "no bookings match these filters" purely from whether
+any filter is currently set — no backend change was needed for that distinction.
+
+One implementation bug, caught immediately by the new tests rather than shipped: the first version of two
+of the new session fixtures in `tests/sessions.test.js` reused `at(600)`/`at(624)`/`at(648)`, time offsets
+a *different*, pre-existing test in the same file already used — a genuine room/instructor scheduling
+collision, not a bug in the filter logic itself, fixed by moving the new fixtures to a clearly disjoint
+window (`at(1200)` and up).
+
+### Verification
+
+Backend `npm test --test-concurrency=1` — 468 tests, 467 passing, 1 skipped (unchanged shape) — and `npm
+run lint`, clean. Frontend `npm run lint` and `npm run build`, clean. The full Playwright suite, 81 tests
+(70 before this session plus 11 new: 6 instructor role/class/date-filter tests, 5 member My-Bookings-
+filter tests), run twice consecutively, both times clean. A fresh `npm run db:reset` (no new migration
+this session — every change was to existing routes and frontend pages) followed by the backend suite once
+more (468/467/1, identical) and the Playwright suite once more against the freshly reset database (81/81,
+clean). Two Playwright failures surfaced mid-session during one full-suite run — this new instructor
+filter test, and an unrelated, untouched recurring-generation test from an earlier milestone — both
+verified non-reproducible when run in isolation immediately after, consistent with transient load on the
+machine running the full ~90-test suite rather than a real regression; the next two full-suite runs (the
+ones recorded above) were both clean.
 
 ## What was cut
 
