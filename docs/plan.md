@@ -1001,6 +1001,42 @@ test environments stay on `'lax'`, so this run exercises the unchanged branch �
 only branch is inherently something this local suite cannot exercise, and is instead verified by the
 deployment steps themselves).
 
+## Session 21 — the real deploy exposed Session 20's cookie fix as insufficient; switched to a same-origin proxy
+
+Session 20's `sameSite: 'none'` fix was actually deployed (Vercel: `class-booking-theta.vercel.app`,
+Render: `class-booking-bcj4.onrender.com`, Supabase database) — and login still didn't stick. Chrome's
+Network tab showed the `Set-Cookie` arriving correctly on the login response (`SameSite=None; Secure;
+HttpOnly` all present) but the cookie was never sent back on the next request. Root cause: `SameSite=None`
+only controls whether a cookie *may* be sent cross-site — it does nothing about current Chrome's separate
+third-party-cookie policy, which blocks a cookie set by one registrable domain in a request from a page on
+a different one, regardless of what `SameSite` says. No `SameSite` value was ever going to fix this; the
+actual fix is removing the cross-site relationship entirely.
+
+Implemented the user's own specified architecture: Vercel `rewrites` (`frontend/vercel.json`, new) proxy
+`/api/*` to the Render backend server-side, so the browser only ever calls the frontend's own origin.
+`frontend/src/api/client.js`'s `API_BASE_URL` now defaults to `window.location.origin` instead of a
+configured backend URL (kept as an explicit override for anyone who wants to bypass the proxy).
+`frontend/vite.config.js` gained a matching dev-server proxy (`/api` → `localhost:3000`) so local dev has
+the identical same-origin shape, not a second, different code path to reason about. With the browser now
+never seeing a cross-site request in either environment, `auth/cookies.js`'s `sameSite` went back to a
+plain, unconditional `'lax'` — simpler than Session 20's environment-conditional value, and strictly more
+secure (real CSRF protection restored). See `docs/decisions.md`, Decision 51, which explicitly marks
+Decision 50 as reversed and explains why the original diagnosis (correct on `SameSite` semantics) missed
+the actual, separate browser policy that was really blocking it.
+
+No backend route, schema, migration, or CORS logic changed — `middleware/cors.js` is untouched and still
+correct, it simply stops being what a browser-driven request needs to satisfy, since none of those requests
+look cross-origin to the browser anymore.
+
+### Verification
+
+Backend `npm test` — 484 tests, 483 passing, 1 skipped (unchanged shape) — and `npm run lint`, clean.
+Frontend `npm run lint` and `npm run build`, clean. The full Playwright suite, 94/94, run twice, both times
+clean — this run is the meaningful verification this time, not just a regression check: it exercises the
+new `vite.config.js` dev-server proxy end to end (every login, every authenticated request, the CSV
+download's `Content-Disposition` header) through the identical same-origin shape the Vercel rewrite gives
+production, which is what actually proves the architecture works rather than merely compiles.
+
 ## What was cut
 
 Nothing was cut from goal 4's own scope — all eight specified phases, including the full required

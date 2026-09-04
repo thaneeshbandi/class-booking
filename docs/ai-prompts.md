@@ -1273,3 +1273,57 @@ The cookie bug above is the significant one: nothing in this project's existing 
 site. It was found by reasoning through the real deployment topology before writing instructions for it,
 not by a failing test — worth recording here because it is exactly the kind of gap "the tests are green" can
 hide.
+
+## The real deploy broke login anyway; switched to a same-origin Vercel proxy
+
+### Prompt
+
+After the deploy from the previous prompt's guidance went live, login still didn't stick: `POST
+/api/auth/login` returned 200 with a correct-looking `Set-Cookie` header (`SameSite=None; Secure;
+HttpOnly` all present, confirmed in Chrome's Network tab), but every following request — `GET
+/api/dashboard`, `GET /api/members/alerts/expiring` — came back 401, and Chrome confirmed no `Cookie`
+header was being sent at all. The user asked for the fix to be made directly rather than explained, named
+the exact files to inspect first, specified the required architecture explicitly (a Vercel rewrite proxying
+`/api/*` from the frontend's own origin to the Render backend, so the browser never talks to Render
+directly), and listed thirteen numbered requirements — preserve existing API paths, keep cookie-based auth,
+never move the token to `localStorage`, don't weaken auth or CORS, keep local dev working, update
+`VITE_API_BASE_URL` appropriately, add Vercel config, check whether the cookie's own attributes need to
+change for the new architecture, run backend tests/lint and the frontend build, never touch schema/
+migrations/secrets, and a specific list of things to report back at the end.
+
+### What was produced
+
+Diagnosed the actual cause before changing anything: `SameSite=None` only governs whether a cookie *may* be
+sent cross-site — it says nothing about Chrome's separate third-party-cookie policy, which blocks a cookie
+set by one registrable domain from ever being sent back in a request from a page on a different one,
+independent of `SameSite`. That's what the symptom (cookie stored, never resent) actually was. Built exactly
+the requested architecture: `frontend/vercel.json` (new) rewrites `/api/*` to the Render origin server-side;
+`frontend/src/api/client.js`'s base URL now defaults to the page's own origin (`window.location.origin`)
+rather than a configured backend URL, kept overridable via `VITE_API_BASE_URL` for anyone who wants to
+bypass the proxy deliberately; `frontend/vite.config.js` gained a matching dev-server proxy so local dev
+has the same same-origin shape, not a second code path. With the browser never seeing a cross-site request
+in either environment, `auth/cookies.js`'s `sameSite` reverted from the previous milestone's
+`isProduction ? 'none' : 'lax'` to a plain, unconditional `'lax'` — simpler and strictly more secure than
+what it replaced, and explicitly documented as reversing that decision (`docs/decisions.md`, Decision 51,
+which marks Decision 50 reversed rather than silently overwriting it). No backend route, schema, migration,
+CORS logic, or secret was touched. Verified with the full backend suite, both lints, the frontend build,
+and — the meaningful check here — the full Playwright suite run twice against the new dev-server proxy,
+since that's what actually proves the same-origin shape works end to end rather than merely compiles.
+
+### What was correct
+
+The previous milestone's diagnosis of *why* the original unconditional `'lax'` would fail cross-site was
+correct; what it got wrong was assuming `SameSite=None` was a sufficient fix, when a real browser's separate
+third-party-cookie policy made it insufficient in practice. The user's own specified architecture (a
+same-origin proxy) is the actual fix for both problems at once, which is why it was implemented exactly as
+given rather than adjusted.
+
+### What was wrong, and what was corrected
+
+Decision 50 (previous milestone): `sameSite: 'none'` was reasoned through carefully and was correct on
+`SameSite` semantics alone, but incomplete — it didn't account for the third-party-cookie policy modern
+Chrome enforces independently of `SameSite`, which is a separate mechanism entirely. That gap was invisible
+to every test this project has (nothing in the suite deploys to two real different domains), and only
+surfaced once the app was actually deployed and used in a real browser — exactly the kind of thing "the
+tests are green" cannot catch, and exactly why this correction is recorded here rather than treated as if
+the first fix had simply been finished from the start.

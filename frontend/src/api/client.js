@@ -7,9 +7,20 @@
  * never reads or stores a token itself, only sends `credentials: 'include'`
  * so the browser attaches whatever cookie it already holds. There is
  * nothing here that could read the cookie's value even if it wanted to.
+ *
+ * `API_BASE_URL` defaults to the page's own origin, not the backend's — by
+ * design. Requests are meant to go to `/api/...` on the *frontend's* own
+ * origin, which Vercel then rewrites to the Render backend server-side
+ * (`vercel.json`; the local dev server does the same via `vite.config.js`'s
+ * proxy). That's what makes the auth cookie same-site everywhere: the
+ * browser only ever sees a same-origin request, so `SameSite=Lax` works and
+ * no browser third-party-cookie policy can ever apply to it. `VITE_API_BASE_URL`
+ * still exists as an escape hatch — set it to call the backend's own origin
+ * directly instead, bypassing the proxy — but that reintroduces the
+ * cross-site cookie problem the proxy exists to avoid, so it's not the
+ * default.
  */
-
-const API_BASE_URL = import.meta.env.VITE_API_BASE_URL ?? 'http://localhost:3000';
+const API_BASE_URL = import.meta.env.VITE_API_BASE_URL || window.location.origin;
 
 export class ApiError extends Error {
   constructor(status, body) {

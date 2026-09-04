@@ -1,0 +1,8 @@
+{
+  "rewrites": [
+    {
+      "source": "/api/(.*)",
+      "destination": "https://class-booking-bcj4.onrender.com/api/$1"
+    }
+  ]
+}

@@ -51,13 +51,22 @@ account status, both of which are re-read from `users` on every single request
 account takes effect on the very next request instead of waiting for a 12-hour token to expire, at the
 cost of one extra `SELECT` per request.
 
-In local development the frontend (Vite dev server, `:5173`) and backend (`:3000`) are different
-origins, so every request between them is cross-origin — `src/middleware/cors.js` is a small
-hand-rolled CORS layer (no `cors` package, matching this codebase's standing preference for a few
-lines of plain code over a dependency for something this small) allowing exactly the configured
-`FRONTEND_ORIGIN` with credentials. A wildcard origin is never used: `Access-Control-Allow-Origin: *`
-cannot be combined with `Access-Control-Allow-Credentials: true`, and credentials (the httpOnly
-session cookie) are exactly what a cross-origin request here needs to carry.
+The browser itself never makes a genuinely cross-origin request to the backend, in either environment —
+this is deliberate, not incidental, and it's what makes the httpOnly session cookie work at all (see
+`docs/decisions.md`, Decisions 50–51). `frontend/src/api/client.js` calls relative `/api/...` paths against
+the page's own origin. In local dev, `vite.config.js`'s dev-server proxy forwards `/api/*` from `:5173` to
+the backend on `:3000`; in production (Vercel frontend, Render backend — genuinely different registrable
+domains), `frontend/vercel.json`'s `rewrites` proxy `/api/*` to the Render origin server-side, invisible to
+the browser. Both make the relationship the browser actually sees same-origin, so the session cookie stays
+a plain `SameSite=Lax` cookie everywhere — no cross-site cookie handling to reason about in either place,
+and no dependency on `SameSite=None`, which a real deploy proved insufficient anyway (current Chrome blocks
+a cookie set by a different registrable domain as third-party regardless of its `SameSite` attribute).
+`src/middleware/cors.js` (a small hand-rolled CORS layer, no `cors` package, matching this codebase's
+standing preference for a few lines of plain code over a dependency for something this small) still exists
+and is still correctly configured — allowing exactly the configured `FRONTEND_ORIGIN`, never a wildcard,
+since `Access-Control-Allow-Origin: *` cannot be combined with `Access-Control-Allow-Credentials: true` —
+but a browser-driven request no longer needs to satisfy it at all; it remains relevant only for the
+explicit `VITE_API_BASE_URL` escape hatch that calls the backend's own origin directly, bypassing the proxy.
 
 The backend talks to Postgres exclusively through Knex, either as ad-hoc queries or as an explicit
 `db.transaction(async trx => { ... })` for anything that reads-then-writes under a concurrency

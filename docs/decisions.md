@@ -855,3 +855,38 @@ backend/src/domain/sessionConflicts.js`), not invented for this file.
   page's preflight fails before the browser ever sends the real request, so CORS is already doing the job
   `SameSite=Lax` would have. Local dev and tests keep `'lax'` (same-site there, and marginally safer where
   it costs nothing) rather than switching everything to `'none'` unconditionally.
+- **Later reversed:** see Decision 51 — `sameSite: 'none'` was deployed and, in the browser that actually
+  matters (current Chrome), never worked at all: independent of the `SameSite` attribute, Chrome treats a
+  cookie set by a genuinely different registrable domain than the page as a third-party cookie and blocks
+  it outright. The `Set-Cookie` response arrived and Chrome's network panel showed it, but it was never
+  sent back on the next request — exactly the symptom this decision's own reasoning said `'none'` would
+  *prevent*. The fix was not a different `SameSite` value; it was removing the cross-site relationship
+  entirely (Decision 51).
+
+## Decision 51
+
+- **Chose:** Vercel `rewrites` (`frontend/vercel.json`) proxy `/api/*` to the Render backend server-side, so
+  the browser only ever calls the frontend's own origin — never Render directly. `src/api/client.js` now
+  defaults to the page's own origin instead of a configured backend URL; `vite.config.js` gained a matching
+  dev-server proxy so local dev has the identical shape. The session cookie's `sameSite` went back to a
+  plain, unconditional `'lax'` (`auth/cookies.js`), reversing Decision 50's `isProduction ? 'none' : 'lax'`.
+- **Rejected:** Any variant of `SameSite=None` (already tried and deployed — see Decision 50's own
+  reversal); moving the token out of a cookie into `localStorage` read by client JavaScript (explicitly
+  ruled out — that trades a solved problem, XSS-driven token theft, for the one `httpOnly` exists to
+  prevent, just to route around a cookie-policy problem that has a real fix); a custom `Domain` attribute
+  on the cookie (would not help — the domains are genuinely different registrable domains; `Domain` widens
+  a cookie's own site, it cannot make two different sites the same one).
+- **Why:** Decision 50 treated the problem as "which `SameSite` value is correct for a cross-site request,"
+  and answered it correctly *for the letter of the spec* — but current Chrome's third-party-cookie policy
+  operates independently of `SameSite` entirely: a cookie set by a response from one registrable domain,
+  in a request initiated by a page on a different one, is a third-party cookie, full stop, regardless of
+  what `SameSite` says. No `SameSite` value fixes that, because `SameSite` was never the actual mechanism
+  blocking it. The only real fix is removing the cross-site relationship itself — making every request the
+  browser sees look same-origin, which is exactly what a same-origin reverse proxy does. This also
+  simplifies the cookie configuration rather than complicating it further: `sameSite: 'lax'` unconditionally
+  is both simpler than Decision 50's environment-conditional value and strictly more secure (real CSRF
+  protection, not the reduced protection `'none'` accepts), because the proxy makes the condition that used
+  to require `'none'` (a genuinely cross-site relationship) no longer true in either environment. CORS
+  (`middleware/cors.js`) is unchanged and still correctly configured — it simply stops being the thing a
+  browser-driven request ever needs to satisfy, since the browser no longer sees a cross-origin request at
+  all; it remains relevant only for the escape-hatch direct-call path `VITE_API_BASE_URL` still allows.
