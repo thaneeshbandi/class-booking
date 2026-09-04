@@ -1117,3 +1117,60 @@ Two things, both caught by tests before being trusted, neither in the filtering 
    recurring-generation test from an earlier milestone) failed once during a full ~90-test suite run and
    passed cleanly when re-run in isolation immediately after — verified as transient rather than assumed:
    re-running the *entire* suite twice more, both times clean, before trusting the work as done.
+
+## Duplicate member email prevention, and a profile-navigation UX fix
+
+### Prompt
+
+A two-issue bug/feature report with hard constraints stated up front: no push to GitHub, no rewriting git
+history, keep current functionality intact, one new incremental commit, inspect the existing
+implementation before changing anything, weaken no authorization rule. Issue 1: staff creating a member
+from the Members page could create a second member row with an email that already existed — required a
+server-side (not merely frontend) rejection, explicitly warning that `members.email` might have a
+deliberate non-uniqueness rule tied to signup/account-linking and to inspect before changing it, explicitly
+forbidding a race-prone "SELECT then INSERT" duplicate check in favor of a real database constraint, and
+listing nine specific backend test scenarios plus five specific Playwright scenarios. Issue 2: the
+sidebar's bottom-left user identity control did nothing when clicked — required it to become a real,
+keyboard-accessible link (not a clickable `<div>`) to the existing `/profile` route for all three roles,
+with an explicit security constraint that it must always resolve to the *authenticated* user's own profile
+and never be constructed from a client-supplied id. Also asked for Playwright coverage of the navigation
+for all three roles, an explicit regression-protection list of prior milestones' work to re-verify, and the
+usual documentation/verification/git steps.
+
+### What was produced
+
+Inspected `migrations/003_members.js` and `linkOrCreateMemberForSignup` before writing any migration —
+confirmed `members.email` non-uniqueness was in fact deliberate, and documented the reversal explicitly
+(`docs/decisions.md`, Decision 47) rather than silently changing it. Added migration
+`014_members_email_unique.js` (`members_email_unique`), which relies on the pre-existing
+`members_email_normalised` `CHECK` constraint for case-/whitespace-insensitivity, matching the exact
+pattern `users.email` already uses. `routes/members.js`'s `POST /` and `PATCH /:id` catch the `23505` and
+return a clean `409`; no pre-check `SELECT` was added anywhere. Checked the shared dev database and every
+test file for pre-existing duplicate emails before adding the constraint, and fixed the two that were
+genuine committed setups (the seed's Lindqvist household members, and `memberLinking.test.js`'s ambiguous-
+match test) rather than merely working around them. Added the nine backend test scenarios (across
+`members.test.js`, `memberLinking.test.js`, and `schema.test.js`) and four Playwright scenarios covering
+create, duplicate rejection (with a visible friendly error, retained form values, and no extra row),
+case/whitespace-insensitivity, and edit-time rejection. For issue 2, read `AppShell.jsx` fresh and turned
+`.sidebar-footer` into a `<Link to="/profile">`, added matching hover/focus CSS, and added four Playwright
+tests (one per role, plus a link-semantics check) confirming the control is a real anchor pointing at
+`/profile` and that logout — a separate, topbar control — still works.
+
+### What was correct
+
+Both root causes were exactly what the relevant file suggested on a first read: the migration's own
+comment for the email issue, and a plain, unstyled, unlinked `<div>` for the navigation issue. No frontend
+changes were needed for issue 1's error-display requirements — the existing `ErrorBanner`/`errorCopy.js`
+system and `MemberForm`'s React state already satisfied every one of them once the backend returned a
+clean 409.
+
+### What was wrong, and what was corrected
+
+Writing `tests/schema.test.js`'s new case-insensitivity test for `members.email`, the first draft asserted
+a `23505` (unique violation) for a raw, uppercase-email direct insert — reasoning by analogy to the
+duplicate-email tests rather than checking the actual established pattern. Before running it, the existing
+`users.email` case-insensitivity test in the same file was checked, which expects `23514` (check
+violation) for exactly this case, because the `_email_normalised` `CHECK` constraint fires before the
+`UNIQUE` constraint on a value that was never pre-normalized by the application layer. The new test was
+corrected to expect `23514` to match, before it was ever run — a wrong assumption caught by checking
+precedent rather than by a failing test.

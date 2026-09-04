@@ -840,6 +840,77 @@ verified non-reproducible when run in isolation immediately after, consistent wi
 machine running the full ~90-test suite rather than a real regression; the next two full-suite runs (the
 ones recorded above) were both clean.
 
+## Session 18 — duplicate member email prevention, and a profile-navigation UX fix
+
+Two independent, explicitly-scoped bug/feature reports, with hard constraints up front: keep every
+existing functionality intact, weaken no authorization rule, and inspect the existing implementation
+before touching anything.
+
+**Duplicate member emails.** A staff user could create a second `members` row with an email that already
+belonged to an existing member. Inspected `migrations/003_members.js` and `linkOrCreateMemberForSignup`
+first, since `members.email` non-uniqueness looked deliberate — it was: the migration's own comment
+documented one household email across multiple children's memberships as intentional, and the linking
+domain function had a whole branch (`candidates.length > 1`) built to handle it. The explicit new
+requirement ("staff cannot create two members with the same email") directly contradicts that old design,
+so this session treated the new instruction as authoritative rather than silently reinterpreting it — see
+`docs/decisions.md`, Decision 47, for the full reasoning, including why the old design was never given its
+own decisions.md entry in the first place. Added migration `014_members_email_unique.js`
+(`members_email_unique`), which — combined with the pre-existing `members_email_normalised` `CHECK`
+constraint — makes the constraint case-/whitespace-insensitive the same way `users.email` already is, with
+no functional index needed. `routes/members.js`'s `POST /` and `PATCH /:id` both catch the resulting
+`23505` and return a plain `409 { error: 'A member with this email already exists.' }`; no pre-check
+`SELECT` was added, so the constraint itself — not application logic — is what makes two concurrent staff
+requests for the same email resolve to exactly one success and one clean 409. No frontend code changes
+were needed: the existing `ErrorBanner`/`errorCopy.js` system already shows a 409's own message as-is, and
+`MemberForm`'s React state already survives a failed submit with the entered values intact.
+
+Before adding the constraint, the shared dev database and every test file were checked for existing
+duplicate emails that would break the migration or a `db:reset`. Found three: two were accidental dev/test
+pollution (cleared by `db:reset`, no code change needed), and two were real, committed setups that had to
+be fixed rather than merely worked around — the seed's two Lindqvist household members (given their own
+distinct emails) and `tests/memberLinking.test.js`'s "ambiguous email match" test (its direct-duplicate-
+insert setup is no longer constructible at all, so it was rewritten to assert the rejection itself, not
+deleted). `tests/members.test.js`'s and `tests/schema.test.js`'s own "allows two members to share an
+email" tests were rewritten the same way, matching the exact `failsWith`/`succeeds` pattern those files
+already use for `users.email`. `linkOrCreateMemberForSignup` itself was left behaviorally unchanged — only
+its comment was updated to note the `> 1` branch is now defensive/unreachable in ordinary operation — per
+this session's own instruction not to alter unrelated signup/linking behavior.
+
+**Profile navigation.** The sidebar's bottom-left identity control (avatar + name) did nothing when
+clicked. Read `AppShell.jsx` fresh rather than relying on memory of it, and turned `.sidebar-footer` from a
+plain `<div>` into a React Router `<Link to="/profile">` — the same, already-existing `/profile` route
+every role's own "Profile" nav link points to, which `GET /api/profile` already derives from `req.user.id`
+alone (see `docs/decisions.md`, Decision 48, for why a real `<Link>` and the existing route, not a new
+parameterized one, was the only choice seriously considered). Added matching hover/focus CSS to
+`styles.css` (`.sidebar-footer:hover`, `:focus-visible`) so the whole control reads as clickable, not just
+the text. The same `<aside className="sidebar">` markup is shared by the desktop and mobile-drawer views,
+so no separate mobile-specific change was needed; the nearby logout control lives in the topbar, a
+different element entirely, and was untouched.
+
+### What was correct
+
+Both root causes were exactly what a first read of the relevant file suggested — the migration comment for
+the email issue, and the plain `<div>` for the navigation issue — so no rework was needed on either fix
+once identified.
+
+### What was wrong, and what was corrected
+
+Writing `tests/schema.test.js`'s new case-insensitivity test for `members.email`, the first draft expected
+a `23505` (unique violation) for a raw, uppercase-email direct insert. Checking the existing, established
+`users.email` case-insensitivity test in the same file first (before running the new one) showed it
+expects `23514` (check violation) instead — the `_email_normalised` `CHECK` constraint fires before the
+`UNIQUE` constraint on a value that was never pre-normalized. Corrected before running, to match that exact
+established pattern.
+
+### Verification
+
+Backend `npm test` — 474 tests, 473 passing, 1 skipped (unchanged shape) — and `npm run lint`, clean.
+Frontend `npm run lint` and `npm run build`, clean. The full Playwright suite, 89 tests (81 before this
+session plus 8 new: 4 duplicate-member-email tests on the staff Members page and 4 sidebar-identity-control
+navigation tests, one per role plus a link-semantics check), run twice consecutively, both times clean. A
+fresh `npm run db:reset` (14 migrations, including the new one) followed by the backend suite once more
+(474/473/1, identical).
+
 ## What was cut
 
 Nothing was cut from goal 4's own scope — all eight specified phases, including the full required

@@ -16,13 +16,17 @@ import { env } from '../config/env.js';
  * user's member record cannot be claimed" hold as a database-enforced
  * property, not just an unchecked assumption.
  *
- * `members.email` is deliberately *not* unique (see `003_members.js` — one
- * parent's email on two children's memberships is ordinary), so more than
- * one unlinked member can legitimately share a normalized email. Guessing
- * which one a signing-up person meant would risk silently attaching a
- * stranger's booking history and membership expiry to the wrong account, so
- * an ambiguous match (more than one candidate) falls back to creating a
- * fresh member rather than linking to any of them. See `docs/decisions.md`.
+ * `members.email` was, until migration 014, deliberately non-unique (see
+ * `003_members.js` — one parent's email on two children's memberships was
+ * considered ordinary). That design was later reversed on an explicit
+ * product requirement: `members_email_unique` now makes two members sharing
+ * an email a database-level impossibility, so `candidates.length` can no
+ * longer exceed 1 in ordinary operation. The `> 1` branch below is left in
+ * place as defensive code — unreachable given the current constraint, but
+ * harmless to keep, and this function's own signup/linking behavior is
+ * deliberately unchanged by the reversal (see `docs/decisions.md`) — it
+ * still falls back to creating a fresh member rather than guessing which
+ * candidate to link, exactly as it did before the constraint existed.
  */
 export async function linkOrCreateMemberForSignup(trx, { userId, fullName, email }) {
   const candidates = await trx('members').where({ email }).whereNull('user_id').forUpdate();

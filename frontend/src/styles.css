@@ -236,6 +236,18 @@ textarea:focus-visible,
   padding: 14px 20px;
   margin-top: auto;
   border-top: 1px solid rgba(255, 255, 255, 0.08);
+  text-decoration: none;
+  color: inherit;
+  transition: background-color 120ms ease;
+}
+
+.sidebar-footer:hover {
+  background: rgba(255, 255, 255, 0.07);
+}
+
+.sidebar-footer:focus-visible {
+  outline: 2px solid #fff;
+  outline-offset: -2px;
 }
 
 .sidebar-footer-text {

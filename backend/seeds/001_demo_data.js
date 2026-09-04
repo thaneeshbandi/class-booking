@@ -225,9 +225,12 @@ export async function seed(knex) {
     const staffId = user.ada;
 
     // -- members -------------------------------------------------------------
-    // Oscar and Elsa deliberately share one address: members are identified by
-    // their row, never by email, and each carries its own expiry and therefore
-    // its own alert. This is the case a UNIQUE(email) would have broken.
+    // Every member here has a distinct email — `members.email` is UNIQUE as of
+    // migration 014 (see that migration and docs/decisions.md for why the
+    // earlier "one household email on two memberships" design was reversed).
+    // Oscar and Elsa Lindqvist previously shared one address to demonstrate
+    // that non-uniqueness; they now have their own, matching every other
+    // member in this seed.
     const members = await trx('members')
       .insert([
         {
@@ -257,12 +260,12 @@ export async function seed(knex) {
         },
         {
           full_name: 'Oscar Lindqvist',
-          email: 'lindqvist.household@example.com',
+          email: 'oscar.lindqvist@example.com',
           membership_expires_on: addDays(today, 5), // inside the alert window
         },
         {
           full_name: 'Elsa Lindqvist',
-          email: 'lindqvist.household@example.com', // same address, own expiry
+          email: 'elsa.lindqvist@example.com',
           membership_expires_on: addDays(today, 200),
         },
         {

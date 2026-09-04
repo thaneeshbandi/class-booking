@@ -752,3 +752,58 @@ backend/src/domain/sessionConflicts.js`), not invented for this file.
   is ANDed onto ownership rather than replacing or widening it, a member can construct no query — however
   broad the filter values — that returns another member's booking; `tests/memberPortal.test.js` proves
   this directly rather than leaving it as an inference from the code's shape.
+
+## Decision 47
+
+- **Chose:** `members.email` is now database-unique (`members_email_unique`, migration 014), enforced the
+  same way `users.email` already is — a plain `UNIQUE(email)` constraint that behaves case-/whitespace-
+  insensitively only because the pre-existing `members_email_normalised` `CHECK` constraint already
+  guarantees every stored value is `lower(btrim(email))`, so no functional index was needed. `routes/
+  members.js`'s `POST /` and `PATCH /:id` catch the resulting `23505` and translate it into a plain
+  `409 { error: 'A member with this email already exists.' }` — the same translate-the-constraint-
+  violation shape `routes/auth.js`'s signup handler already uses for `users.email`. No pre-check `SELECT`
+  was added anywhere; the constraint itself is what makes two concurrent staff requests for the same email
+  resolve to exactly one success and one clean 409, not a race.
+- **Rejected:** A `SELECT ... WHERE email = ?` existence check before the `INSERT`/`UPDATE` (race-prone
+  between two concurrent staff requests — the exact bug class this decision exists to close); a unique
+  index scoped to `WHERE user_id IS NULL` (unlinked members only), which would have preserved the letter
+  of the old design but still let staff create a second *unlinked* duplicate before either was ever
+  claimed — not what was asked for.
+- **Why — this reverses an earlier, deliberate design choice.** `members.email` was, until this decision,
+  intentionally non-unique: `migrations/003_members.js`'s own comment documented one household email
+  appearing on more than one child's membership as ordinary, and `linkOrCreateMemberForSignup`'s
+  `candidates.length > 1` ("ambiguous match") branch existed specifically to handle it by falling back to
+  creating a fresh member rather than guessing which one to link. That original choice was never given its
+  own numbered entry here — only the migration's inline comment — which is itself a gap this decision
+  corrects by writing the reversal down honestly rather than pretending uniqueness was the plan all along.
+  A direct, explicit product requirement ("staff cannot create two member records with the same email") is
+  a stronger and more concrete signal than an inferred convenience for a scenario the brief never actually
+  asked for, so it is treated as authoritative rather than "casually" overridden. The blast radius was
+  kept narrow on purpose:
+  `linkOrCreateMemberForSignup` itself is unchanged (only its comment now notes the `> 1` branch is
+  defensive/unreachable in ordinary operation, not deleted — it is harmless to keep and removing it would
+  be an unrelated cleanup this decision did not need to make), and the two pre-existing tests whose setup
+  depended on constructing a real duplicate (`memberLinking.test.js`'s ambiguous-match test,
+  `schema.test.js`'s and `members.test.js`'s own "allows two members to share an email" tests) were
+  rewritten to assert the new, stronger guarantee (the database now rejects the same setup with `23505`)
+  rather than deleted — the underlying property they protected (no member can be silently misattributed)
+  still holds, just via a database constraint instead of ambiguity-tolerant application logic. The seed's
+  two Lindqvist household members were given their own distinct emails for the same reason.
+
+## Decision 48
+
+- **Chose:** The sidebar's bottom-left identity control (`AppShell.jsx`'s `.sidebar-footer`) became a real
+  React Router `<Link to="/profile">` wrapping the avatar and name — the exact same, already-existing
+  `/profile` route every role's own "Profile" nav link already points to, and which `GET /api/profile`
+  already derives from `req.user.id` alone. No new route, page, or backend endpoint was added.
+- **Rejected:** A clickable `<div>`/`<button>` with an `onClick` navigate call; a new route parameterized
+  by a user or member id (e.g. `/profile/:userId`).
+- **Why:** A `<div>` with a click handler is not a link — it gets no `href`, no keyboard `Tab` stop, no
+  "link" role for assistive tech, and no native middle-click/open-in-new-tab behavior, all of which a
+  one-line `<Link>` gets for free; there was no reason to hand-roll worse behavior than the framework
+  already provides for exactly this. A parameterized route was never seriously on the table: this app has
+  no page anywhere that opens *someone else's* profile by id (`account-security.spec.js` already asserts
+  no such route exists), and building one here — even unused by this control — would be exactly the kind
+  of client-trusted-id shape (an IDOR waiting to happen) this codebase has consistently refused elsewhere.
+  Routing to the plain, existing `/profile` keeps "whose profile am I looking at" a question the server
+  answers from the session alone, never from anything the URL or the client claims.

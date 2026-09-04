@@ -105,6 +105,14 @@ router.post('/', authenticate, requireRole('staff'), async (req, res, next) => {
       .returning('*');
     res.status(201).json({ member: serializeMember(row) });
   } catch (error) {
+    // `members_email_unique` (migration 014) is the actual enforcement — a
+    // pre-check `SELECT` here would still leave a race window between two
+    // concurrent staff requests for the same email; the database constraint
+    // is what closes it. This only translates the resulting 23505 into the
+    // application's normal conflict shape, never a raw Postgres error.
+    if (error?.code === '23505') {
+      return res.status(409).json({ error: 'A member with this email already exists.' });
+    }
     next(error);
   }
 });
@@ -132,6 +140,13 @@ router.patch('/:id', authenticate, requireRole('staff'), async (req, res, next) 
     if (!row) return res.status(404).json({ error: 'Member not found.' });
     res.json({ member: serializeMember(row) });
   } catch (error) {
+    // Same enforcement as create (see its own comment): `members_email_unique`
+    // is the real guard. Updating a member to its own current email hits no
+    // conflict — the constraint only rejects a value some *other* row already
+    // has — so this never blocks a no-op or unrelated-field edit.
+    if (error?.code === '23505') {
+      return res.status(409).json({ error: 'A member with this email already exists.' });
+    }
     next(error);
   }
 });

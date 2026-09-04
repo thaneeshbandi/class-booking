@@ -149,3 +149,48 @@ test.describe('profile — every role', () => {
     await expect(page.getByLabel('Email')).toHaveValue(email);
   });
 });
+
+// The sidebar's bottom-left identity control (avatar + name) is a second,
+// separate way into the exact same `/profile` route the nav link above
+// already exercises — not a different page. Each test below clicks that
+// control directly (rather than the "Profile" nav link) and confirms it
+// lands on `/profile` showing that same signed-in user's own identity.
+test.describe('profile — sidebar identity control (bottom-left)', () => {
+  test('a member: clicking the bottom-left identity control opens their own profile', async ({ page }) => {
+    const email = `identity-member-${Date.now()}@example.com`;
+    await signup(page, { fullName: 'Identity Member', email });
+    await page.locator('.sidebar-footer').click();
+    await expect(page).toHaveURL(/\/profile$/);
+    await expect(page.locator('.profile-header').getByText('Identity Member')).toBeVisible();
+    await expect(page.getByLabel('Email')).toHaveValue(email);
+  });
+
+  test('staff: clicking the bottom-left identity control opens their own profile', async ({ page }) => {
+    await login(page, STAFF);
+    await page.locator('.sidebar-footer').click();
+    await expect(page).toHaveURL(/\/profile$/);
+    await expect(page.locator('.profile-header').getByText(STAFF.fullName)).toBeVisible();
+    await expect(page.locator('.profile-header').getByText('Staff', { exact: true })).toBeVisible();
+  });
+
+  test('instructor: clicking the bottom-left identity control opens their own profile', async ({ page }) => {
+    await login(page, INSTRUCTOR);
+    await page.locator('.sidebar-footer').click();
+    await expect(page).toHaveURL(/\/profile$/);
+    await expect(page.locator('.profile-header').getByText(INSTRUCTOR.fullName)).toBeVisible();
+    await expect(page.locator('.profile-header').getByText('Instructor', { exact: true })).toBeVisible();
+  });
+
+  test('the bottom-left identity control uses real link semantics, not a clickable div', async ({ page }) => {
+    await login(page, STAFF);
+    const control = page.locator('.sidebar-footer');
+    await expect(control).toHaveAttribute('href', '/profile');
+    // A real anchor is keyboard-focusable and reachable via role queries —
+    // a clickable `<div>` would satisfy neither.
+    await expect(page.getByRole('link', { name: STAFF.fullName })).toHaveAttribute('href', '/profile');
+    // Logout — the other identity control, in the topbar — is untouched by
+    // this change and still works from the same page.
+    await page.getByRole('button', { name: 'Log out' }).click();
+    await expect(page).toHaveURL(/\/login$/);
+  });
+});

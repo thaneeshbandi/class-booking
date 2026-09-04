@@ -171,34 +171,34 @@ describe('signup account/member linking', () => {
     assert.equal(String(members[0].id), String(staffMember.id));
   });
 
-  it('an ambiguous email match (more than one unlinked member sharing it) creates a fresh member rather than guessing', async () => {
-    const email = uniqueEmail('ambiguous');
-    const [memberA] = await db('members')
-      .insert({ full_name: 'Child A', email, membership_expires_on: '2099-01-01' })
-      .returning('*');
-    const [memberB] = await db('members')
-      .insert({ full_name: 'Child B', email, membership_expires_on: '2099-06-01' })
-      .returning('*');
+  // A dedicated test for "more than one unlinked member shares this email"
+  // (`linkOrCreateMemberForSignup`'s `candidates.length > 1` branch, which
+  // creates a fresh member rather than guessing which candidate to link)
+  // used to live here, constructed by directly inserting two `members` rows
+  // with the same email. That scenario is no longer constructible at all —
+  // `members_email_unique` (migration 014) now makes two members sharing an
+  // email a database-level impossibility, a stronger guarantee than the
+  // ambiguity-avoidance this test verified. The branch itself is left in
+  // `memberLinking.js` unchanged (defensive code, not currently reachable in
+  // ordinary operation — see that file's own comment) rather than removed,
+  // per this milestone's explicit instruction not to change unrelated
+  // signup/linking behavior. See `docs/decisions.md` for the full reasoning.
 
-    const res = await server.request({
-      method: 'POST',
-      path: '/api/auth/signup',
-      body: { fullName: 'Parent Signup', email, password: 'a-real-password-123' },
-    });
-    assert.equal(res.status, 201);
+  it('cannot construct two unlinked members sharing an email in the first place — the database rejects it', async () => {
+    const email = uniqueEmail('would-be-ambiguous');
+    await db('members').insert({ full_name: 'Child A', email, membership_expires_on: '2099-01-01' });
 
-    const members = await db('members').where({ email }).orderBy('id');
-    assert.equal(members.length, 3, 'a new member row was created, not merged into either candidate');
+    await assert.rejects(
+      () => db('members').insert({ full_name: 'Child B', email, membership_expires_on: '2099-06-01' }),
+      (error) => error.code === '23505',
+      'a second member with the same normalized email must be rejected at the database layer',
+    );
 
-    const untouchedA = members.find((row) => String(row.id) === String(memberA.id));
-    const untouchedB = members.find((row) => String(row.id) === String(memberB.id));
-    assert.equal(untouchedA.user_id, null, 'the first ambiguous candidate was never claimed');
-    assert.equal(untouchedB.user_id, null, 'the second ambiguous candidate was never claimed');
-    assert.equal(untouchedA.full_name, 'Child A');
-    assert.equal(untouchedB.full_name, 'Child B');
+    const members = await db('members').where({ email });
+    assert.equal(members.length, 1, 'only the first member exists — the rejected insert created nothing');
   });
 
-  it('domain: a member already linked to a different user can never be claimed', async () => {
+  it('domain: a member already linked to a different user can never be claimed — excluded from candidates, and its link is untouched even when the fallback create collides', async () => {
     const email = uniqueEmail('domain-linked');
     const [existingUser] = await db('users')
       .insert({
@@ -221,13 +221,22 @@ describe('signup account/member linking', () => {
       })
       .returning('*');
 
-    const result = await db.transaction((trx) =>
-      linkOrCreateMemberForSignup(trx, { userId: newUser.id, fullName: 'Claimer', email }),
+    // This exact `email` is only reachable here because the test constructs
+    // it directly — in real HTTP use, `email` is always the login the
+    // caller just registered with, and `users.email` uniqueness already
+    // guarantees no one else currently holds it (see `memberLinking.js`'s
+    // own comment). With `members.email` now also unique
+    // (migration 014), the already-linked candidate is still correctly
+    // excluded (never claimed) — but the fallback "create a fresh member"
+    // path then collides with that same member's own email, which the
+    // database — correctly — refuses rather than silently double-using it.
+    await assert.rejects(
+      () => db.transaction((trx) => linkOrCreateMemberForSignup(trx, { userId: newUser.id, fullName: 'Claimer', email })),
+      (error) => error.code === '23505',
     );
 
-    assert.equal(result.outcome, 'created');
-    assert.notEqual(String(result.member.id), String(linkedMember.id));
-
+    // The one property this test exists to prove still holds: the
+    // already-linked member was never reassigned to the new user.
     const stillLinked = await db('members').where({ id: linkedMember.id }).first();
     assert.equal(String(stillLinked.user_id), String(existingUser.id), "the original owner's link is untouched");
   });

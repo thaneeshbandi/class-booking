@@ -40,6 +40,7 @@ const EXPECTED_INDEXES = [
   'members_pkey',
   'members_membership_expires_on',
   'members_user_id_unique',
+  'members_email_unique',
   'rooms_pkey',
   'rooms_name_ci_unique',
   'classes_pkey',
@@ -357,16 +358,33 @@ describe('6. constraints', () => {
     );
   });
 
-  it('allows two members to share an email address', async () => {
-    // Deliberate: a member is identified by its row, not its address.
-    await succeeds(async (trx) => {
-      const existing = await trx('members').first('email');
-      await trx('members').insert({
-        full_name: 'Household Second',
+  it('rejects two members sharing an email address', async () => {
+    // Until migration 014, this was deliberately allowed — a member was
+    // identified by its row, not its address (one parent's email on two
+    // children's memberships was considered ordinary). Reversed on an
+    // explicit product requirement; see docs/decisions.md.
+    const existing = await db('members').first('email');
+    await failsWith('23505', (trx) =>
+      trx('members').insert({
+        full_name: 'Duplicate Email Test',
         email: existing.email,
         membership_expires_on: '2027-01-01',
-      });
-    });
+      }),
+    );
+  });
+
+  it('storage normalization is what makes members.email uniqueness case-insensitive, the same as users.email', async () => {
+    const existing = await db('members').first('email');
+    // A raw, not-yet-normalized INSERT is rejected by the normalization
+    // CHECK before it ever reaches the uniqueness check — the exact same
+    // two-layer shape the `users.email` test above already documents.
+    await failsWith('23514', (trx) =>
+      trx('members').insert({
+        full_name: 'Duplicate Email Case Test',
+        email: existing.email.toUpperCase(),
+        membership_expires_on: '2027-01-01',
+      }),
+    );
   });
 
   it('enforces one alert dismissal per member and expiry date', async () => {

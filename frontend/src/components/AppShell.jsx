@@ -1,5 +1,5 @@
 import { useEffect, useState } from 'react';
-import { NavLink, Outlet, useLocation } from 'react-router-dom';
+import { Link, NavLink, Outlet, useLocation } from 'react-router-dom';
 
 import { useAuth } from '../context/AuthContext.jsx';
 import { useAlertCount } from '../hooks/useAlertCount.js';
@@ -110,12 +110,16 @@ export function AppShell() {
           Class Booking
         </div>
         <NavLinks links={links} alertCount={alertCount} onNavigate={() => setMobileNavOpen(false)} />
-        <div className="sidebar-footer">
+        <Link
+          to="/profile"
+          className="sidebar-footer"
+          onClick={() => setMobileNavOpen(false)}
+        >
           <Avatar fullName={user.fullName} size={30} />
           <div className="sidebar-footer-text">
             <div className="sidebar-footer-name">{user.fullName}</div>
           </div>
-        </div>
+        </Link>
       </aside>
 
       {mobileNavOpen ? (
